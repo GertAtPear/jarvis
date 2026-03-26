@@ -1,0 +1,6 @@
+@Eve.Agent_HostAddress = http://localhost:5014
+
+GET {{Eve.Agent_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

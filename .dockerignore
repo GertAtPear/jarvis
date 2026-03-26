@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+.git/
+logs/
+ssh-keys/
+.env
+*.user
+browser-screenshots/

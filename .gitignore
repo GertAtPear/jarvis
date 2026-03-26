@@ -1,0 +1,32 @@
+# Build output
+**/bin/
+**/obj/
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+**/[Pp]ackages/
+
+# IDE
+.vs/
+*.user
+*.suo
+.vscode/
+.idea/
+*.swp
+*~
+
+# Secrets / environment
+.env
+ssh-keys/
+nginx/certs/
+
+# Logs & runtime artefacts
+logs/
+*.log
+browser-screenshots/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,96 @@
+@using Markdig
+
+@if (Message.Role == "user")
+{
+    <div class="message-row user-row">
+        <div class="message-group user-group">
+            <div class="message-bubble user-bubble">
+                @if (Message.Attachments.Count > 0)
+                {
+                    <div class="message-attachments">
+                        @foreach (var att in Message.Attachments)
+                        {
+                            @AttachmentView(att)
+                        }
+                    </div>
+                }
+                <div class="message-content">@Message.Content</div>
+            </div>
+            <div class="message-time-below user-time">@FormatTime(Message.CreatedAt)</div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="message-row agent-row">
+        <div class="avatar @AvatarClass">@AvatarLetter</div>
+        <div class="message-group agent-group">
+            <div class="message-sender-name">@(Message.AgentName ?? "Jarvis")</div>
+            <div class="message-bubble agent-bubble">
+                @if (Message.Attachments.Count > 0)
+                {
+                    <div class="message-attachments">
+                        @foreach (var att in Message.Attachments)
+                        {
+                            @AttachmentView(att)
+                        }
+                    </div>
+                }
+                <div class="message-content">@RenderedMarkdown</div>
+            </div>
+            <div class="message-time-below agent-time">
+                @FormatTime(Message.CreatedAt)
+                <ModelPill Provider="@Message.Provider" Model="@Message.Model" />
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public ChatMessageDto Message { get; set; } = null!;
+
+    private static readonly MarkdownPipeline Pipeline =
+        new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+
+    private MarkupString RenderedMarkdown =>
+        new(string.IsNullOrEmpty(Message.Content)
+            ? ""
+            : Markdown.ToHtml(Message.Content, Pipeline));
+
+    private string AvatarLetter => (Message.AgentName ?? "J")[..1].ToUpperInvariant();
+
+    private string AvatarClass => (Message.AgentName ?? "").ToLowerInvariant() switch
+    {
+        string s when s.StartsWith('j') => "avatar-jarvis",
+        string s when s.StartsWith('a') => "avatar-andrew",
+        string s when s.StartsWith('e') => "avatar-eve",
+        _ => "avatar-jarvis"
+    };
+
+    private static string FormatTime(DateTimeOffset time) =>
+        time.ToLocalTime().ToString("HH:mm");
+
+    private RenderFragment AttachmentView(AttachmentDto att) => builder =>
+    {
+        if (att.MimeType.StartsWith("image/") && att.Base64Preview is not null)
+        {
+            builder.OpenElement(0, "img");
+            builder.AddAttribute(1, "class", "message-attachment-img");
+            builder.AddAttribute(2, "src",   $"data:{att.MimeType};base64,{att.Base64Preview}");
+            builder.AddAttribute(3, "alt",   att.FileName);
+            builder.CloseElement();
+        }
+        else
+        {
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", "message-attachment-file");
+            builder.OpenElement(2, "span");
+            builder.AddContent(3, "📄");
+            builder.CloseElement();
+            builder.OpenElement(4, "span");
+            builder.AddContent(5, att.FileName);
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+    };
+}

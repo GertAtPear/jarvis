@@ -1,0 +1,559 @@
+@page "/"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using Microsoft.AspNetCore.SignalR.Client
+@inject ChatApiService      Api
+@inject IJSRuntime          JS
+@inject IConfiguration      Config
+@inject NavigationManager   Nav
+@implements IAsyncDisposable
+
+<PageTitle>Mediahost AI Ops</PageTitle>
+
+@* Mobile sidebar backdrop *@
+@if (isMobile && isSidebarOpen)
+{
+    <div class="sidebar-backdrop" @onclick="CloseSidebar"></div>
+}
+
+<div class="layout">
+
+    <Sidebar IsOpen="@isSidebarOpen"
+             OnClose="CloseSidebar"
+             OnSessionSelected="LoadSessionAsync"
+             OnNewSession="NewSessionAsync"
+             OnAgentSelected="SelectDirectAgentAsync"
+             ActiveSessionId="@sessionId"
+             ActiveAgentName="@directAgent" />
+
+    <div class="main-area" id="chat-container">
+
+        @* Mobile top bar *@
+        @if (isMobile)
+        {
+            <header class="mobile-header">
+                <button class="hamburger"
+                        @onclick="() => isSidebarOpen = true"
+                        aria-label="Open menu">&#9776;</button>
+                <span class="mobile-app-title">MEDIAHOST AI</span>
+                <button class="new-session-mobile"
+                        @onclick="NewSessionAsync"
+                        aria-label="New session">+</button>
+            </header>
+        }
+
+        @* Desktop chat header *@
+        @if (!isMobile)
+        {
+            var headerName   = directAgent is not null ? char.ToUpper(directAgent[0]) + directAgent[1..] : "Jarvis";
+            var headerAvatar = directAgent is not null ? directAgent[..1].ToUpperInvariant() : "J";
+            var headerSub    = directAgent is not null ? $"{headerName} — Direct" : "Mediahost AI Operations";
+            var avatarClass  = directAgent?.ToLowerInvariant().StartsWith("a") == true ? "avatar-andrew"
+                             : directAgent?.ToLowerInvariant().StartsWith("e") == true ? "avatar-eve"
+                             : "avatar-jarvis";
+            <div class="chat-header">
+                <div class="avatar @avatarClass">@headerAvatar</div>
+                <div class="chat-header-info">
+                    <div class="chat-header-name">@headerName</div>
+                    <div class="chat-header-status">@headerSub</div>
+                </div>
+                @if (directAgent is not null)
+                {
+                    <button class="new-chat-btn" @onclick="ClearDirectAgent">&#8592; Back to Jarvis</button>
+                }
+                <button class="new-chat-btn" @onclick="NewSessionAsync">+ New chat</button>
+            </div>
+        }
+
+        <ReconnectingBanner Status="@reconnectStatus" OnRetry="RetryHubAsync" />
+
+        @* Messages *@
+        <div class="messages-area" id="messages-area">
+            @foreach (var msg in messages)
+            {
+                <ChatMessage Message="msg" />
+            }
+            @if (isTyping)
+            {
+                <TypingIndicator />
+            }
+        </div>
+
+        @* Input area *@
+        <div class="input-area">
+            <AttachmentPreviewStrip Attachments="pendingAttachments"
+                                    OnRemove="RemoveAttachment" />
+            <div class="input-card">
+            <div class="input-row">
+                <textarea id="message-input"
+                          class="message-input"
+                          placeholder="Message Jarvis&#x2026;"
+                          @bind="inputText"
+                          @bind:event="oninput"
+                          @bind:after="AutoGrowAsync"
+                          @onkeydown="HandleKeyDownAsync"
+                          rows="1"></textarea>
+                <label class="attach-btn"
+                       for="file-input"
+                       title="Attach file">&#128206;</label>
+                <InputFile id="file-input"
+                           accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/csv"
+                           multiple
+                           OnChange="HandleFilesSelectedAsync"
+                           style="display:none" />
+                <button class="send-btn"
+                        @onclick="SendMessageAsync"
+                        disabled="@(string.IsNullOrWhiteSpace(inputText) && pendingAttachments.Count == 0)">
+                    Send &#x2192;
+                </button>
+            </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+@code {
+    // ── State ──────────────────────────────────────────────────────────────
+    private List<ChatMessageDto>    messages           = [];
+    private List<PendingAttachment> pendingAttachments = [];
+    private string                  inputText          = "";
+    private bool                    isTyping;
+    private bool                    isSidebarOpen;
+    private bool                    isMobile;
+    private Guid?                   sessionId;
+    private string?                 directAgent;       // non-null = bypass Jarvis, talk directly to this agent
+    private string?                 reconnectStatus;   // null | "reconnecting" | "failed"
+
+    // ── Session memory across agent switches ───────────────────────────────
+    private Guid?                        _savedJarvisSessionId;
+    private readonly Dictionary<string, Guid> _agentSessionIds = new();
+
+    // ── JS module references ───────────────────────────────────────────────
+    private IJSObjectReference?          _chatMod;
+    private IJSObjectReference?          _attachMod;
+    private DotNetObjectReference<Chat>? _dotnetRef;
+
+    // ── SignalR ────────────────────────────────────────────────────────────
+    private HubConnection? _hub;
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _chatMod   = await JS.InvokeAsync<IJSObjectReference>("import", "./js/chat.js");
+        _attachMod = await JS.InvokeAsync<IJSObjectReference>("import", "./js/attachments.js");
+
+        _dotnetRef = DotNetObjectReference.Create(this);
+        await _attachMod.InvokeVoidAsync("registerPasteHandler", _dotnetRef);
+        await _attachMod.InvokeVoidAsync("registerDropZone", "chat-container", _dotnetRef);
+        await _chatMod.InvokeVoidAsync("onResize", _dotnetRef);
+
+        isMobile = await _chatMod.InvokeAsync<bool>("isMobile");
+
+        var savedSession = await _chatMod.InvokeAsync<string?>("getLocalStorage", "sessionId");
+        if (Guid.TryParse(savedSession, out var id))
+        {
+            sessionId = id;
+            messages  = await Api.GetHistoryAsync(id);
+        }
+        else
+        {
+            await CheckBriefingAsync();
+        }
+
+        StateHasChanged();
+        await ScrollToBottomAsync();
+        await FocusInputAsync();
+
+        _ = SetupHubAsync();   // fire-and-forget; hub not guaranteed available yet
+    }
+
+    // ── Morning briefing ───────────────────────────────────────────────────
+    private async Task CheckBriefingAsync()
+    {
+        var today    = DateOnly.FromDateTime(DateTime.Today).ToString("yyyy-MM-dd");
+        var lastDate = await _chatMod!.InvokeAsync<string?>("getLocalStorage", "lastBriefingDate");
+
+        if (lastDate != today)
+        {
+            var briefing = await Api.GetBriefingAsync();
+            if (briefing?.HasItems == true)
+            {
+                messages.Add(JarvisMessage(briefing.Content));
+                await _chatMod!.InvokeVoidAsync("setLocalStorage", "lastBriefingDate", today);
+                return;
+            }
+        }
+
+        if (messages.Count == 0)
+        {
+            var hour     = DateTime.Now.Hour;
+            var greeting = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+            messages.Add(JarvisMessage($"Good {greeting}, Gert. I'm Jarvis. Ready when you are."));
+        }
+    }
+
+    private static ChatMessageDto JarvisMessage(string content) => new(
+        Id:          Guid.NewGuid(),
+        Role:        "assistant",
+        AgentName:   "Jarvis",
+        Content:     content,
+        Provider:    null,
+        Model:       null,
+        Attachments: [],
+        CreatedAt:   DateTimeOffset.Now
+    );
+
+    // ── Send ───────────────────────────────────────────────────────────────
+    private async Task SendMessageAsync()
+    {
+        var text = inputText.Trim();
+        if (string.IsNullOrEmpty(text) && pendingAttachments.Count == 0) return;
+
+        // Optimistic UI — append user message immediately
+        var attachDtos = pendingAttachments
+            .Select(a => new AttachmentDto(Guid.NewGuid(), a.FileName, a.MimeType, a.Base64Data))
+            .ToList();
+
+        messages.Add(new ChatMessageDto(
+            Id:          Guid.NewGuid(),
+            Role:        "user",
+            AgentName:   "Gert",
+            Content:     text,
+            Provider:    null,
+            Model:       null,
+            Attachments: attachDtos,
+            CreatedAt:   DateTimeOffset.Now
+        ));
+
+        var copy      = pendingAttachments.ToList();
+        inputText     = "";
+        pendingAttachments.Clear();
+        isTyping      = true;
+        StateHasChanged();
+        await ScrollToBottomAsync();
+
+        ChatResponse? response = directAgent is not null
+            ? await Api.SendDirectAsync(directAgent, text, sessionId)
+            : copy.Count > 0
+                ? await Api.SendMessageWithAttachmentsAsync(text, sessionId, copy)
+                : await Api.SendMessageAsync(text, sessionId);
+
+        isTyping = false;
+
+        if (response is not null)
+        {
+            sessionId = response.SessionId;
+            // Keep agent session map up to date for session restore on switch-back
+            if (directAgent is not null)
+                _agentSessionIds[directAgent] = response.SessionId;
+            var agents = response.AgentsUsed ?? [];
+            var agentName = agents.Count > 0 && !string.IsNullOrEmpty(agents[0])
+                ? char.ToUpper(agents[0][0]) + agents[0][1..]
+                : "Jarvis";
+
+            if (response.SecretPurged)
+            {
+                // Remove the optimistic user message we added before the API call
+                if (messages.Count > 0 && messages[^1].Role == "user")
+                    messages.RemoveAt(messages.Count - 1);
+                // Replace with a single notice — never stored in the DB
+                messages.Add(JarvisMessage(
+                    "\u2713 Secret stored securely in the vault. This exchange has been removed from your conversation history."));
+            }
+            else
+            {
+                messages.Add(new ChatMessageDto(
+                    Id:          Guid.NewGuid(),
+                    Role:        "assistant",
+                    AgentName:   agentName,
+                    Content:     response.Response ?? "",
+                    Provider:    null,
+                    Model:       null,
+                    Attachments: [],
+                    CreatedAt:   DateTimeOffset.Now
+                ));
+            }
+            try { await _chatMod!.InvokeVoidAsync("setLocalStorage", "sessionId", sessionId.ToString()); }
+            catch (JSException) { }
+            catch (JSDisconnectedException) { }
+        }
+        else
+        {
+            messages.Add(JarvisMessage("Sorry, I couldn\u2019t reach the server. Please try again."));
+        }
+
+        StateHasChanged();
+        await ScrollToBottomAsync();
+        await FocusInputAsync();
+    }
+
+    // ── Session management ─────────────────────────────────────────────────
+    private async Task LoadSessionAsync(Guid id)
+    {
+        sessionId     = id;
+        messages      = await Api.GetHistoryAsync(id);
+        isSidebarOpen = false;
+        await _chatMod!.InvokeVoidAsync("setLocalStorage", "sessionId", id.ToString());
+        StateHasChanged();
+        await ScrollToBottomAsync();
+    }
+
+    private async Task NewSessionAsync()
+    {
+        sessionId              = null;
+        directAgent            = null;
+        _savedJarvisSessionId  = null;
+        _agentSessionIds.Clear();
+        isSidebarOpen          = false;
+        messages.Clear();
+        await _chatMod!.InvokeVoidAsync("removeLocalStorage", "sessionId");
+        await CheckBriefingAsync();
+        StateHasChanged();
+    }
+
+    private async Task SelectDirectAgentAsync(string agentName)
+    {
+        // Save current Jarvis session before the first switch away from Jarvis
+        if (directAgent is null && sessionId.HasValue)
+            _savedJarvisSessionId = sessionId;
+
+        // Save current direct-agent session so we can restore it later
+        if (directAgent is not null && sessionId.HasValue)
+            _agentSessionIds[directAgent] = sessionId.Value;
+
+        directAgent   = agentName;
+        isSidebarOpen = false;
+
+        // Restore a previous session for this agent if one exists
+        if (_agentSessionIds.TryGetValue(agentName, out var existingSession))
+        {
+            sessionId = existingSession;
+            messages  = await Api.GetHistoryAsync(existingSession);
+            await _chatMod!.InvokeVoidAsync("setLocalStorage", "sessionId", existingSession.ToString());
+        }
+        else
+        {
+            sessionId = null;
+            messages.Clear();
+            await _chatMod!.InvokeVoidAsync("removeLocalStorage", "sessionId");
+            var displayName = char.ToUpper(agentName[0]) + agentName[1..];
+            messages.Add(JarvisMessage($"You're now talking directly to {displayName}. This conversation bypasses Jarvis completely."));
+        }
+
+        StateHasChanged();
+        await ScrollToBottomAsync();
+    }
+
+    private async Task ClearDirectAgent()
+    {
+        // Save the current direct-agent session before returning to Jarvis
+        if (directAgent is not null && sessionId.HasValue)
+            _agentSessionIds[directAgent] = sessionId.Value;
+
+        directAgent = null;
+
+        // Restore the last Jarvis session if we have one
+        if (_savedJarvisSessionId.HasValue)
+        {
+            sessionId = _savedJarvisSessionId;
+            messages  = await Api.GetHistoryAsync(_savedJarvisSessionId.Value);
+            await _chatMod!.InvokeVoidAsync("setLocalStorage", "sessionId", _savedJarvisSessionId.ToString());
+        }
+        else
+        {
+            messages.Clear();
+            await _chatMod!.InvokeVoidAsync("removeLocalStorage", "sessionId");
+            messages.Add(JarvisMessage("You're back with Jarvis. What do you need?"));
+        }
+
+        StateHasChanged();
+        await ScrollToBottomAsync();
+    }
+
+    private Task RefreshCurrentSessionAsync() =>
+        sessionId.HasValue ? LoadSessionAsync(sessionId.Value) : Task.CompletedTask;
+
+    // ── SignalR ────────────────────────────────────────────────────────────
+    private async Task SetupHubAsync()
+    {
+        var apiBase = Config["JarvisApi:BaseUrl"] ?? "http://localhost:5000";
+        var hubUrl  = apiBase.TrimEnd('/') + "/hubs/chat";
+
+        _hub = new HubConnectionBuilder()
+            .WithUrl(hubUrl)
+            .WithAutomaticReconnect(new[]
+            {
+                TimeSpan.Zero,
+                TimeSpan.FromSeconds(2),
+                TimeSpan.FromSeconds(5),
+                TimeSpan.FromSeconds(10),
+                TimeSpan.FromSeconds(30),
+                TimeSpan.FromSeconds(60)
+            })
+            .Build();
+
+        _hub.Reconnecting += _ =>
+        {
+            reconnectStatus = "reconnecting";
+            return InvokeAsync(StateHasChanged);
+        };
+
+        _hub.Reconnected += async _ =>
+        {
+            reconnectStatus = null;
+            await RefreshCurrentSessionAsync();
+            await InvokeAsync(StateHasChanged);
+        };
+
+        // Only show the banner if we WERE connected — not on initial connect failure.
+        var wasConnected = false;
+        _hub.Closed += _ =>
+        {
+            if (!wasConnected) return Task.CompletedTask;
+            reconnectStatus = "failed";
+            return InvokeAsync(StateHasChanged);
+        };
+
+        try
+        {
+            await _hub.StartAsync();
+            wasConnected = true;
+        }
+        catch { /* Hub not available yet — fail silently, no banner */ }
+    }
+
+    private async Task RetryHubAsync()
+    {
+        if (_hub is null) return;
+        try
+        {
+            await _hub.StartAsync();
+            reconnectStatus = null;
+        }
+        catch
+        {
+            reconnectStatus = "failed";
+        }
+        StateHasChanged();
+    }
+
+    // ── Keyboard / textarea ────────────────────────────────────────────────
+    private async Task HandleKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            pendingAttachments.Clear();
+            return;
+        }
+
+        if (e.Key == "Enter" && (e.CtrlKey || e.MetaKey))
+            await SendMessageAsync();
+    }
+
+    private async Task AutoGrowAsync()
+    {
+        if (_chatMod is null) return;
+        try { await _chatMod.InvokeVoidAsync("autoGrowTextarea", "message-input"); }
+        catch (JSException) { }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── File attachments ───────────────────────────────────────────────────
+    private const long MaxFileBytes = 20L * 1024 * 1024;
+
+    private async Task HandleFilesSelectedAsync(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles(10))
+        {
+            if (file.Size > MaxFileBytes) continue;
+            using var stream = file.OpenReadStream(MaxFileBytes);
+            using var ms     = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            pendingAttachments.Add(new PendingAttachment(
+                file.Name,
+                file.ContentType,
+                Convert.ToBase64String(ms.ToArray()),
+                file.Size));
+        }
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnFilePasted(FilePayload payload)
+    {
+        if (payload.Size > MaxFileBytes) return;
+        pendingAttachments.Add(new PendingAttachment(
+            payload.Name, payload.MimeType, payload.Base64, payload.Size));
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task OnFileDropped(FilePayload payload) => OnFilePasted(payload);
+
+    [JSInvokable]
+    public async Task OnWindowResize(int width)
+    {
+        var mobile = width < 768;
+        if (!mobile) isSidebarOpen = false;
+        isMobile = mobile;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    private void CloseSidebar() => isSidebarOpen = false;
+
+    private void RemoveAttachment(PendingAttachment att)
+    {
+        pendingAttachments.Remove(att);
+        StateHasChanged();
+    }
+
+    private async Task ScrollToBottomAsync()
+    {
+        if (_chatMod is null) return;
+        try { await _chatMod.InvokeVoidAsync("scrollToBottom", "messages-area"); }
+        catch (JSDisconnectedException) { }
+    }
+
+    private async Task FocusInputAsync()
+    {
+        if (_chatMod is null) return;
+        try { await _chatMod.InvokeVoidAsync("focusElement", "message-input"); }
+        catch (JSDisconnectedException) { }
+    }
+
+    // ── Dispose ────────────────────────────────────────────────────────────
+    public async ValueTask DisposeAsync()
+    {
+        _dotnetRef?.Dispose();
+
+        if (_attachMod is not null)
+        {
+            try
+            {
+                await _attachMod.InvokeVoidAsync("unregisterPasteHandler");
+                await _attachMod.InvokeVoidAsync("unregisterDropZone", "chat-container");
+                await _attachMod.DisposeAsync();
+            }
+            catch { /* ignore all dispose-time JS interop errors */ }
+        }
+
+        if (_chatMod is not null)
+        {
+            try
+            {
+                await _chatMod.InvokeVoidAsync("offResize");
+                await _chatMod.DisposeAsync();
+            }
+            catch { }
+        }
+
+        if (_hub is not null)
+        {
+            try { await _hub.DisposeAsync(); }
+            catch { }
+        }
+    }
+}

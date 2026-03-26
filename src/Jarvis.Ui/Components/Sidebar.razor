@@ -1,0 +1,154 @@
+@inject ChatApiService Api
+@implements IAsyncDisposable
+
+<nav class="sidebar @(IsOpen ? "open" : "")" aria-label="Navigation">
+
+    <div class="sidebar-header">
+        <div class="sidebar-logo">
+            <span class="sidebar-logo-diamond">&#9670;</span>
+            <span class="sidebar-logo-text">MEDIAHOST AI OPS</span>
+        </div>
+    </div>
+
+    <div class="sidebar-body">
+
+        @foreach (var dept in agentsByDept)
+        {
+            var key = dept.Key;
+            <div class="sidebar-section">
+                <div class="sidebar-section-header" @onclick="() => ToggleSection(key)">
+                    <span class="sidebar-section-title">@key</span>
+                    <span class="sidebar-section-chevron @(collapsed.Contains(key) ? "collapsed" : "")">&#9662;</span>
+                </div>
+                @if (!collapsed.Contains(key))
+                {
+                    @foreach (var agent in dept.Value)
+                    {
+                        var a = agent;
+                        <div class="agent-item @(ActiveAgentName == a.Name ? "active" : "")"
+                             @onclick="() => OnAgentSelected.InvokeAsync(a.Name)">
+                            <div class="agent-sidebar-avatar @AgentAvatarClass(a)">
+                                @a.DisplayName[..1].ToUpperInvariant()
+                            </div>
+                            <div class="agent-item-body">
+                                <span class="agent-name">@a.DisplayName</span>
+                                <span class="agent-status-text @a.Status.ToLowerInvariant()">@a.Status.ToLowerInvariant()</span>
+                            </div>
+                            <span class="status-dot @a.Status.ToLowerInvariant()"></span>
+                        </div>
+                    }
+                }
+            </div>
+        }
+
+        @if (sessions.Count > 0)
+        {
+            <div class="sidebar-section">
+                <div class="sidebar-section-header" @onclick='() => ToggleSection("SESSIONS")'>
+                    <span class="sidebar-section-title">CHATS</span>
+                    <span class="sidebar-section-chevron @(collapsed.Contains("SESSIONS") ? "collapsed" : "")">&#9662;</span>
+                </div>
+                @if (!collapsed.Contains("SESSIONS"))
+                {
+                    @foreach (var session in sessions)
+                    {
+                        var s = session;
+                        <div class="session-item @(ActiveSessionId == s.Id ? "active" : "")"
+                             @onclick="() => OnSessionSelected.InvokeAsync(s.Id)">
+                            <div class="session-chat-icon">&#128172;</div>
+                            <div class="session-item-body">
+                                <span class="session-title">@s.Title</span>
+                                <span class="session-time">@RelativeTime(s.LastMessageAt)</span>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        }
+
+    </div>
+
+    <div class="sidebar-footer">
+        <button class="new-session-btn-sidebar" @onclick="() => OnNewSession.InvokeAsync()">
+            + New conversation
+        </button>
+    </div>
+
+</nav>
+
+@code {
+    [Parameter] public bool                   IsOpen            { get; set; }
+    [Parameter] public EventCallback          OnClose           { get; set; }
+    [Parameter] public EventCallback<Guid>    OnSessionSelected { get; set; }
+    [Parameter] public EventCallback          OnNewSession      { get; set; }
+    [Parameter] public EventCallback<string>  OnAgentSelected   { get; set; }
+    [Parameter] public Guid?                  ActiveSessionId   { get; set; }
+    [Parameter] public string?                ActiveAgentName   { get; set; }
+
+    private List<AgentDto>                     agents       = [];
+    private List<SessionSummaryDto>            sessions     = [];
+    private Dictionary<string, List<AgentDto>> agentsByDept = new();
+    private readonly HashSet<string>           collapsed    = [];
+    private System.Threading.Timer?            _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        _timer = new System.Threading.Timer(
+            async _ =>
+            {
+                try
+                {
+                    agents       = await Api.GetAgentsAsync();
+                    agentsByDept = BuildDeptMap(agents);
+                    sessions     = await Api.GetRecentSessionsAsync();
+                    await InvokeAsync(StateHasChanged);
+                }
+                catch { /* never let timer callback crash the circuit */ }
+            },
+            state:   null,
+            dueTime: TimeSpan.FromSeconds(30),
+            period:  TimeSpan.FromSeconds(30));
+    }
+
+    private async Task RefreshAsync()
+    {
+        agents       = await Api.GetAgentsAsync();
+        agentsByDept = BuildDeptMap(agents);
+        sessions     = await Api.GetRecentSessionsAsync();
+    }
+
+    private static Dictionary<string, List<AgentDto>> BuildDeptMap(List<AgentDto> src) =>
+        src.GroupBy(a => (a.Department ?? "Other").ToUpperInvariant())
+           .ToDictionary(g => g.Key, g => g.ToList());
+
+    private void ToggleSection(string key)
+    {
+        if (!collapsed.Remove(key)) collapsed.Add(key);
+    }
+
+    private static string AgentAvatarClass(AgentDto agent) =>
+        (agent.Name ?? "").ToLowerInvariant() switch
+        {
+            string s when s.StartsWith('j') => "avatar-jarvis",
+            string s when s.StartsWith('a') => "avatar-andrew",
+            string s when s.StartsWith('e') => "avatar-eve",
+            _                               => "avatar-jarvis"
+        };
+
+    private static string RelativeTime(DateTimeOffset t)
+    {
+        var diff = DateTimeOffset.Now - t;
+        return diff.TotalMinutes < 1  ? "just now"
+             : diff.TotalMinutes < 60 ? $"{(int)diff.TotalMinutes}m ago"
+             : diff.TotalHours   < 24 ? $"{(int)diff.TotalHours}h ago"
+             : diff.TotalDays    < 2  ? "Yesterday"
+             : t.ToString("MMM d");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timer is not null)
+            await _timer.DisposeAsync();
+    }
+}

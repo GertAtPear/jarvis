@@ -1,0 +1,34 @@
+@if (Attachments.Count > 0)
+{
+    <div class="attachment-strip">
+        @foreach (var att in Attachments)
+        {
+            <div class="attachment-preview-item">
+                @if (att.MimeType.StartsWith("image/"))
+                {
+                    <img class="attachment-thumb"
+                         src="data:@att.MimeType;base64,@att.Base64Data"
+                         alt="@att.FileName" />
+                }
+                else
+                {
+                    <div class="attachment-file">
+                        <span class="file-icon">📄</span>
+                        <span class="file-name">@TruncateName(att.FileName)</span>
+                    </div>
+                }
+                <button class="attachment-remove"
+                        @onclick="() => OnRemove.InvokeAsync(att)"
+                        title="Remove">×</button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public List<PendingAttachment>            Attachments { get; set; } = [];
+    [Parameter, EditorRequired] public EventCallback<PendingAttachment>   OnRemove    { get; set; }
+
+    private static string TruncateName(string name) =>
+        name.Length > 14 ? name[..10] + "…" + name[^3..] : name;
+}

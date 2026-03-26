@@ -1,0 +1,6 @@
+@Browser.Agent_HostAddress = http://localhost:5122
+
+GET {{Browser.Agent_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

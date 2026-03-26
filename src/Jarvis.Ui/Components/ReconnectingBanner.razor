@@ -1,0 +1,21 @@
+@if (!string.IsNullOrEmpty(Status))
+{
+    <div class="reconnecting-banner @(Status == "failed" ? "failed" : "")">
+        @if (Status == "reconnecting")
+        {
+            <span class="spinner"></span>
+            <span>Reconnecting…</span>
+        }
+        else
+        {
+            <span>Connection lost.</span>
+            <button @onclick="OnRetry">Retry</button>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>null | "reconnecting" | "failed"</summary>
+    [Parameter] public string?          Status  { get; set; }
+    [Parameter] public EventCallback    OnRetry { get; set; }
+}
