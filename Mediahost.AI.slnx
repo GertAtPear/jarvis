@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Andrew.Agent/Andrew.Agent.csproj" />
+    <Project Path="src/Mediahost.Tools/Mediahost.Tools.csproj" />
     <Project Path="src/Browser.Agent/Browser.Agent.csproj" />
     <Project Path="src/Eve.Agent/Eve.Agent.csproj" />
     <Project Path="src/Jarvis.Api/Jarvis.Api.csproj" />
@@ -10,5 +11,6 @@
     <Project Path="src/Mediahost.Llm/Mediahost.Llm.csproj" />
     <Project Path="src/Mediahost.Shared/Mediahost.Shared.csproj" />
     <Project Path="src/Mediahost.Vault/Mediahost.Vault.csproj" />
+    <Project Path="src/Rocky.Agent/Rocky.Agent.csproj" />
   </Folder>
 </Solution>

@@ -5,6 +5,7 @@ using Andrew.Agent.Tools;
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
 using Mediahost.Agents.Tools;
+using Mediahost.Agents.Capabilities;
 
 namespace Andrew.Agent.Extensions;
 
@@ -16,6 +17,9 @@ public static class AgentServiceExtensions
     {
         // ── Shared infrastructure (DB, Redis, LLM, vault) ────────────────────────
         services.AddAgentInfrastructure(configuration, "andrew", ["/servers"]);
+
+        // ── Mediahost.Agents capabilities + underlying tools ─────────────────────
+        services.AddMediahostAgents();
 
         // ── Andrew-specific memory ────────────────────────────────────────────────
         services.AddScoped<AndrewMemoryService>();

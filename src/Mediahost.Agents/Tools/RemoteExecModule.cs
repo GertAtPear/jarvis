@@ -1,17 +1,20 @@
 using System.Text.Json;
 using Mediahost.Agents.Services;
-using Microsoft.Extensions.Logging;
 using Mediahost.Llm.Models;
+using Mediahost.Tools.Interfaces;
+using Mediahost.Tools.Models;
+using Microsoft.Extensions.Logging;
 
 namespace Mediahost.Agents.Tools;
 
 /// <summary>
 /// Shared tool module: ssh_exec, winrm_exec.
-/// Depends on IServerResolver (agent-specific) and WinRmService (shared).
+/// Depends on IServerResolver (agent-specific), ISshTool and IWinRmTool (from Mediahost.Tools).
 /// </summary>
 public class RemoteExecModule(
     IServerResolver serverResolver,
-    WinRmService winrm,
+    ISshTool sshTool,
+    IWinRmTool winRmTool,
     ILogger<RemoteExecModule> logger) : IToolModule
 {
     private static readonly JsonSerializerOptions Opts =
@@ -75,7 +78,6 @@ public class RemoteExecModule(
     {
         var serverQuery = RequireString(input, "server");
         var command     = RequireString(input, "command");
-        var timeout     = input.RootElement.TryGetProperty("timeout", out var t) ? t.GetInt32() : 30;
 
         var info = await serverResolver.ResolveAsync(serverQuery, ct);
         if (info is null)
@@ -92,50 +94,36 @@ public class RemoteExecModule(
         sshUser ??= "root";
         var sshPort = int.TryParse(sshPortStr, out var p) ? p : 22;
 
-        Renci.SshNet.AuthenticationMethod authMethod;
+        SshCredentials credentials;
         try
         {
-            authMethod = !string.IsNullOrWhiteSpace(sshKeyPath)
-                ? new Renci.SshNet.PrivateKeyAuthenticationMethod(sshUser, new Renci.SshNet.PrivateKeyFile(sshKeyPath))
-                : new Renci.SshNet.PasswordAuthenticationMethod(sshUser, sshPassword!);
+            credentials = !string.IsNullOrWhiteSpace(sshKeyPath)
+                ? SshCredentials.FromKeyFile(sshUser, sshKeyPath)
+                : SshCredentials.FromPassword(sshUser, sshPassword!);
         }
         catch (Exception ex)
         {
             return Err($"Failed to load SSH credentials: {ex.Message}");
         }
 
-        var connInfo = new Renci.SshNet.ConnectionInfo(info.Host, sshPort, sshUser, authMethod)
+        var target = new ConnectionTarget(info.Hostname, info.Host, sshPort, OsType.Linux);
+        var result = await sshTool.RunCommandAsync(target, credentials, command, ct);
+
+        logger.LogInformation("[ssh_exec] {Host}: {Command} → {Status}", info.Host, command,
+            result.Success ? "ok" : "fail");
+
+        if (!result.Success)
+            return Err($"SSH connection to {info.Host} failed: {result.ErrorMessage}");
+
+        return Ok(new
         {
-            Timeout = TimeSpan.FromSeconds(10)
-        };
-
-        try
-        {
-            using var ssh = new Renci.SshNet.SshClient(connInfo);
-            ssh.Connect();
-
-            using var cmd = ssh.CreateCommand(command);
-            cmd.CommandTimeout = TimeSpan.FromSeconds(timeout);
-            var stdout = cmd.Execute();
-            var stderr = cmd.Error;
-            var exitCode = cmd.ExitStatus;
-
-            logger.LogInformation("[ssh_exec] {Host}: {Command} → exit {Code}", info.Host, command, exitCode);
-
-            return Ok(new
-            {
-                server    = info.Hostname,
-                command,
-                exit_code = exitCode,
-                stdout    = stdout.Trim(),
-                stderr    = stderr.Trim(),
-                success   = exitCode == 0
-            });
-        }
-        catch (Exception ex)
-        {
-            return Err($"SSH connection to {info.Host} failed: {ex.Message}");
-        }
+            server    = info.Hostname,
+            command,
+            stdout    = (result.Value ?? "").Trim(),
+            stderr    = "",
+            exit_code = 0,
+            success   = true
+        });
     }
 
     private async Task<string> WinRmExecAsync(JsonDocument input, CancellationToken ct)
@@ -156,26 +144,25 @@ public class RemoteExecModule(
             return Err($"No WinRM credentials in vault for '{info.Hostname}'. Add winrm_user and winrm_password.");
 
         var winrmPort = int.TryParse(winrmPortStr, out var p) ? p : 5985;
+        var credentials = new WinRmCredentials(winrmUser, winrmPassword);
+        var target = new ConnectionTarget(info.Hostname, info.Host, winrmPort, OsType.Windows);
 
-        try
-        {
-            var result = await winrm.ExecuteAsync(info.Host, winrmPort, winrmUser, winrmPassword, command, timeout, ct);
-            logger.LogInformation("[winrm_exec] {Host}: {Command} → exit {Code}", info.Host, command, result.ExitCode);
+        var result = await winRmTool.RunCommandAsync(target, credentials, command, timeout, ct);
+        logger.LogInformation("[winrm_exec] {Host}: {Command} → {Status}", info.Host, command,
+            result.Success ? "ok" : "fail");
 
-            return Ok(new
-            {
-                server    = info.Hostname,
-                command,
-                exit_code = result.ExitCode,
-                stdout    = result.Stdout,
-                stderr    = result.Stderr,
-                success   = result.ExitCode == 0
-            });
-        }
-        catch (Exception ex)
+        if (!result.Success)
+            return Err($"WinRM connection to {info.Host} failed: {result.ErrorMessage}");
+
+        return Ok(new
         {
-            return Err($"WinRM connection to {info.Host} failed: {ex.Message}");
-        }
+            server    = info.Hostname,
+            command,
+            stdout    = result.Value ?? "",
+            stderr    = "",
+            exit_code = 0,
+            success   = true
+        });
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

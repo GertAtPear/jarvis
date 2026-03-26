@@ -127,6 +127,7 @@ services:
       Agents__EveBaseUrl: http://eve-agent:5003
       Agents__BrowserBaseUrl: http://browser-agent:5004
       Agents__RexBaseUrl: http://rex-agent:5005
+      Agents__RockyBaseUrl: http://host.containers.internal:5006
     networks:
       - mediahost-ai
     volumes:
@@ -231,6 +232,33 @@ services:
       - /run/user/1000/podman/podman.sock:/run/podman/podman.sock:z
     networks:
       - mediahost-ai
+
+  rocky-agent:
+    build:
+      context: .
+      dockerfile: src/Rocky.Agent/Dockerfile
+    container_name: rocky-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5006
+      ConnectionStrings__Postgres: Host=localhost;Port=5432;Database=mediahostai;Username=mediahostai;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: localhost:6379,password=${REDIS_PASSWORD}
+      Infisical__BaseUrl: http://localhost:8080
+      Infisical__ClientId: ${INFISICAL_CLIENT_ID}
+      Infisical__ClientSecret: ${INFISICAL_CLIENT_SECRET}
+      Infisical__ProjectId: ${INFISICAL_PROJECT_ID}
+      Infisical__Environment: prod
+    network_mode: host
+    # Rocky uses host networking so it can reach LAN/VPN servers for SSH checks.
+    cap_add:
+      - NET_RAW   # required for ping (ICMP raw sockets)
+    volumes:
+      - ./logs/rocky:/app/logs
+      - ./ssh-keys:/app/ssh-keys:ro
 
   andrew-agent:
     build:

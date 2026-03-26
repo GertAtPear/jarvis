@@ -1,17 +1,17 @@
 using System.Diagnostics;
-using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Andrew.Agent.Data.Repositories;
 using Andrew.Agent.Models;
 using Mediahost.Shared.Services;
-using Renci.SshNet;
-using Renci.SshNet.Common;
+using Mediahost.Tools.Interfaces;
+using Mediahost.Tools.Models;
 
 namespace Andrew.Agent.Services;
 
 public sealed partial class SshDiscoveryService(
+    ISshTool sshTool,
     IScopedVaultService vault,
     ServerRepository servers,
     ContainerRepository containers,
@@ -59,50 +59,21 @@ public sealed partial class SshDiscoveryService(
         sshUser ??= "root";
         var sshPort = server.SshPort > 0 ? server.SshPort : 22;
 
-        // STEP 2 — SSH connect
-        AuthenticationMethod authMethod;
-        try
-        {
-            authMethod = !string.IsNullOrWhiteSpace(sshKeyPath)
-                ? new PrivateKeyAuthenticationMethod(sshUser, new PrivateKeyFile(sshKeyPath))
-                : new PasswordAuthenticationMethod(sshUser, sshPassword!);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to load SSH credentials for {Host}", server.Hostname);
-            return new DiscoveryResult { Success = false, ErrorMessage = $"Failed to load SSH credentials: {ex.Message}" };
-        }
+        // STEP 2 — Build tool models (connection is established per-command via ISshTool)
+        var target = new ConnectionTarget(server.Hostname, server.IpAddress, sshPort, OsType.Linux);
+        var sshCreds = !string.IsNullOrWhiteSpace(sshKeyPath)
+            ? SshCredentials.FromKeyFile(sshUser, sshKeyPath)
+            : SshCredentials.FromPassword(sshUser, sshPassword!);
 
-        var sshHost = string.IsNullOrWhiteSpace(server.IpAddress) ? server.Hostname : server.IpAddress;
-        var connInfo = new Renci.SshNet.ConnectionInfo(sshHost, sshPort, sshUser, authMethod)
-        {
-            Timeout = TimeSpan.FromSeconds(10)
-        };
-
-        SshClient ssh;
-        try
-        {
-            ssh = new SshClient(connInfo);
-            ssh.Connect();
-        }
-        catch (Exception ex) when (ex is SshException or SocketException)
-        {
-            logger.LogWarning(ex, "SSH connection failed to {Host}:{Port}", server.Hostname, sshPort);
-            await discoveryLogs.LogAsync(server.Id, "full", false,
-                new { error = ex.Message }, (int)sw.ElapsedMilliseconds);
-            return new DiscoveryResult { Success = false, ErrorMessage = $"SSH connection failed: {ex.Message}" };
-        }
-
-        using (ssh)
         {
             // STEP 3a — OS + hardware info
             try
             {
-                var output = RunCommand(ssh,
+                var r = await sshTool.RunCommandAsync(target, sshCreds,
                     "uname -r && cat /etc/os-release | grep -E 'NAME|VERSION=' && " +
                     "nproc && free -m | awk '/^Mem:/{print $2}' && " +
-                    "df -h / | awk 'NR==2{print $2,$3}'");
-                ApplyOsInfo(server, output);
+                    "df -h / | awk 'NR==2{print $2,$3}'", ct);
+                ApplyOsInfo(server, r.Value ?? "");
             }
             catch (Exception ex)
             {
@@ -113,8 +84,9 @@ public sealed partial class SshDiscoveryService(
             var parsed = new List<ContainerParseResult>();
             try
             {
-                var output = RunCommand(ssh, "docker ps -a --format '{{json .}}' 2>/dev/null");
-                parsed = await ParseDockerContainersAsync(ssh, server.Id, output, ct);
+                var r = await sshTool.RunCommandAsync(target, sshCreds,
+                    "docker ps -a --format '{{json .}}' 2>/dev/null", ct);
+                parsed = await ParseDockerContainersAsync(target, sshCreds, server.Id, r.Value ?? "", ct);
             }
             catch (Exception ex)
             {
@@ -126,8 +98,9 @@ public sealed partial class SshDiscoveryService(
             // STEP 3c — Docker Compose projects
             try
             {
-                var output = RunCommand(ssh, "docker compose ls --format json 2>/dev/null || echo '[]'");
-                ApplyComposeProjects(containerList, output);
+                var r = await sshTool.RunCommandAsync(target, sshCreds,
+                    "docker compose ls --format json 2>/dev/null || echo '[]'", ct);
+                ApplyComposeProjects(containerList, r.Value ?? "");
             }
             catch (Exception ex)
             {
@@ -138,7 +111,9 @@ public sealed partial class SshDiscoveryService(
             var processes = new List<ProcessInfo>();
             try
             {
-                processes = ParseProcesses(RunCommand(ssh, "ps aux --sort=-%cpu --no-headers | head -30"));
+                var r = await sshTool.RunCommandAsync(target, sshCreds,
+                    "ps aux --sort=-%cpu --no-headers | head -30", ct);
+                processes = ParseProcesses(r.Value ?? "");
             }
             catch (Exception ex)
             {
@@ -149,7 +124,9 @@ public sealed partial class SshDiscoveryService(
             var listeningPorts = new List<int>();
             try
             {
-                listeningPorts = ParseListeningPorts(RunCommand(ssh, "ss -tlnp 2>/dev/null | tail -n +2"));
+                var r = await sshTool.RunCommandAsync(target, sshCreds,
+                    "ss -tlnp 2>/dev/null | tail -n +2", ct);
+                listeningPorts = ParseListeningPorts(r.Value ?? "");
             }
             catch (Exception ex)
             {
@@ -160,8 +137,9 @@ public sealed partial class SshDiscoveryService(
             var systemdServices = new List<string>();
             try
             {
-                systemdServices = ParseSystemdServices(RunCommand(ssh,
-                    "systemctl list-units --type=service --state=running --no-pager --plain 2>/dev/null | awk 'NR>1{print $1}'"));
+                var r = await sshTool.RunCommandAsync(target, sshCreds,
+                    "systemctl list-units --type=service --state=running --no-pager --plain 2>/dev/null | awk 'NR>1{print $1}'", ct);
+                systemdServices = ParseSystemdServices(r.Value ?? "");
             }
             catch (Exception ex)
             {
@@ -213,12 +191,6 @@ public sealed partial class SshDiscoveryService(
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
-
-    private static string RunCommand(SshClient ssh, string command)
-    {
-        using var cmd = ssh.RunCommand(command);
-        return cmd.Result;
-    }
 
     private static void ApplyOsInfo(ServerInfo server, string output)
     {
@@ -285,7 +257,7 @@ public sealed partial class SshDiscoveryService(
     }
 
     private async Task<List<ContainerParseResult>> ParseDockerContainersAsync(
-        SshClient ssh, Guid serverId, string output, CancellationToken ct)
+        ConnectionTarget target, SshCredentials credentials, Guid serverId, string output, CancellationToken ct)
     {
         var result = new List<ContainerParseResult>();
 
@@ -303,9 +275,9 @@ public sealed partial class SshDiscoveryService(
             JsonDocument? envDoc = null;
             try
             {
-                var envJson = RunCommand(ssh,
-                    $"docker inspect {entry.ID} --format '{{{{json .Config.Env}}}}'");
-                var envArray = JsonSerializer.Deserialize<string[]>(envJson.Trim(), JsonOpts);
+                var envResult = await sshTool.RunCommandAsync(target, credentials,
+                    $"docker inspect {entry.ID} --format '{{{{json .Config.Env}}}}'", ct);
+                var envArray = JsonSerializer.Deserialize<string[]>((envResult.Value ?? "").Trim(), JsonOpts);
                 if (envArray is not null)
                 {
                     var dict = new Dictionary<string, string>(envArray.Length);
