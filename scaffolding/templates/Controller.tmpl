@@ -1,0 +1,44 @@
+using Mediahost.Agents.Http;
+using Mediahost.Agents.Services;
+
+namespace {{AgentName}}.Agent.Controllers;
+
+public static class {{AgentName}}Endpoints
+{
+    public static IEndpointRouteBuilder Map{{AgentName}}Endpoints(this IEndpointRouteBuilder app)
+    {
+        var group = app.MapGroup("/api/{{AgentNameLower}}").WithTags("{{AgentName}}");
+
+        // POST /api/{{AgentNameLower}}/chat
+        group.MapPost("/chat", async (
+            ChatRequest req,
+            IAgentService agent,
+            CancellationToken ct) =>
+        {
+            var result = await agent.HandleMessageAsync(req.Message, req.SessionId, ct);
+            return Results.Ok(new ChatResponse(result.Response, result.SessionId, result.ToolCallCount));
+        })
+        .WithName("{{AgentName}}Chat")
+        .WithSummary("Send a message to {{AgentName}}");
+
+        // POST /api/{{AgentNameLower}}/reset
+        group.MapPost("/reset", async (
+            string sessionId,
+            IAgentService agent,
+            CancellationToken ct) =>
+        {
+            await agent.ResetSessionAsync(sessionId, ct);
+            return Results.Ok(new { reset = true, sessionId });
+        })
+        .WithName("{{AgentName}}Reset")
+        .WithSummary("Reset {{AgentName}}'s conversation history for a session");
+
+        // GET /api/{{AgentNameLower}}/status
+        group.MapGet("/status", () =>
+            Results.Ok(new { agentName = "{{AgentName}}", status = "active", port = {{Port}} }))
+        .WithName("{{AgentName}}Status")
+        .WithSummary("Get {{AgentName}}'s operational status");
+
+        return app;
+    }
+}

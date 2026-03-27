@@ -17,7 +17,8 @@ public sealed class LlmUsageLogger(
         int inputTokens,
         int outputTokens,
         int durationMs,
-        Guid? sessionId)
+        Guid? sessionId,
+        string? escalatedFrom = null)
     {
         try
         {
@@ -26,10 +27,10 @@ public sealed class LlmUsageLogger(
             const string sql = """
                 INSERT INTO jarvis_schema.llm_usage
                     (session_id, agent_name, provider_name, model_id,
-                     task_type, input_tokens, output_tokens, duration_ms, rule_applied)
+                     task_type, input_tokens, output_tokens, duration_ms, rule_applied, escalated_from)
                 VALUES
                     (@sessionId, @agentName, @provider, @model,
-                     @taskType, @inputTokens, @outputTokens, @durationMs, @ruleApplied)
+                     @taskType, @inputTokens, @outputTokens, @durationMs, @ruleApplied, @escalatedFrom)
                 """;
 
             await conn.ExecuteAsync(sql, new
@@ -42,7 +43,8 @@ public sealed class LlmUsageLogger(
                 inputTokens,
                 outputTokens,
                 durationMs,
-                ruleApplied
+                ruleApplied,
+                escalatedFrom
             });
         }
         catch (Exception ex)

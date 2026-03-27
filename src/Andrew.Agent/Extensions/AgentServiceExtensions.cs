@@ -42,6 +42,8 @@ public static class AgentServiceExtensions
         services.AddScoped<IServerResolver, AndrewServerResolver>();
         services.AddScoped<IToolModule, NetworkDiagnosticsModule>();
         services.AddScoped<IToolModule, RemoteExecModule>();
+        services.AddScoped<IToolModule, BrowserModule>();
+        services.AddScoped<IToolModule, LaptopModule>();
 
         // ── Tool executor (scoped — receives IEnumerable<IToolModule> from DI) ────
         services.AddScoped<AndrewToolExecutor>();

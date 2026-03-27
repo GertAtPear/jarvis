@@ -1,3 +1,4 @@
+using Mediahost.Agents.Alerting;
 using Mediahost.Agents.Data;
 using Mediahost.Llm.Extensions;
 using Mediahost.Shared.Services;
@@ -51,6 +52,10 @@ public static class AgentInfrastructureExtensions
             agentName: agentName,
             ownedPrefixes: vaultOwnedPrefixes,
             sp.GetRequiredService<ILogger<ScopedVaultService>>()));
+
+        // ── Alert dispatch — shared across all agents ─────────────────────────
+        services.AddHttpClient();
+        services.AddScoped<IAlertDispatchService, AlertDispatchService>();
 
         return services;
     }

@@ -1,0 +1,37 @@
+using Mediahost.Agents.Extensions;
+using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
+using {{AgentName}}.Agent.Tools;
+{{#if IsStateful}}
+using {{AgentName}}.Agent.Data;
+{{/if}}
+using {{AgentName}}.Agent.Services;
+
+namespace {{AgentName}}.Agent.Extensions;
+
+public static class {{AgentName}}ServiceExtensions
+{
+    public static IServiceCollection Add{{AgentName}}Services(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Shared infrastructure (DB, Redis, LLM, vault)
+        services.AddAgentInfrastructure(configuration, "{{AgentNameLower}}", ["/{{AgentNameLower}}"]);
+
+        {{#if IsStateful}}
+        // Agent memory
+        services.AddScoped<{{AgentName}}MemoryService>();
+        services.AddScoped<IAgentMemoryService>(sp => sp.GetRequiredService<{{AgentName}}MemoryService>());
+        {{/if}}
+
+        // Shared tool modules (add as needed)
+        // services.AddScoped<IToolModule, RemoteExecModule>();
+        // services.AddScoped<IToolModule, NetworkDiagnosticsModule>();
+
+        // Tool executor and agent service
+        services.AddScoped<{{AgentName}}ToolExecutor>();
+        services.AddScoped<IAgentService, {{AgentName}}AgentService>();
+
+        return services;
+    }
+}

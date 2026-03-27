@@ -1,0 +1,310 @@
+@page "/devices"
+@page "/devices/{DeviceId:guid}"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject ChatApiService Api
+@inject NavigationManager Nav
+
+<PageTitle>Devices — Mediahost AI</PageTitle>
+
+<div class="devices-page">
+
+    <div class="devices-header">
+        <h2 class="page-title">Devices</h2>
+        <button class="btn-primary" @onclick="OpenAddModal">+ Add Device</button>
+    </div>
+
+    @if (isLoading)
+    {
+        <div class="loading-state">Loading devices...</div>
+    }
+    else if (devices.Count == 0)
+    {
+        <div class="empty-state">
+            <p>No devices registered yet.</p>
+            <p>Click <strong>Add Device</strong> to connect your laptop to Jarvis.</p>
+        </div>
+    }
+    else
+    {
+        <div class="device-list">
+            @foreach (var device in devices)
+            {
+                <div class="device-card @(selectedDeviceId == device.Id ? "expanded" : "")">
+                    <div class="device-card-header" @onclick="() => ToggleDevice(device.Id)">
+                        <div class="device-identity">
+                            <span class="device-icon">@OsIcon(device.OsPlatform)</span>
+                            <div class="device-info">
+                                <span class="device-name">@device.Name</span>
+                                <span class="device-meta">@device.Hostname @(device.LahVersion is not null ? $"v{device.LahVersion}" : "")</span>
+                            </div>
+                        </div>
+                        <div class="device-status-area">
+                            <span class="status-dot @(device.IsOnline ? "online" : "offline")"></span>
+                            <span class="status-label">@(device.IsOnline ? "online" : "offline")</span>
+                            @if (device.LastSeenAt.HasValue)
+                            {
+                                <span class="last-seen">@FormatRelative(device.LastSeenAt.Value)</span>
+                            }
+                        </div>
+                    </div>
+
+                    @if (selectedDeviceId == device.Id)
+                    {
+                        <div class="device-detail">
+
+                            @* Permissions *@
+                            <div class="detail-section">
+                                <h4 class="detail-section-title">Permissions</h4>
+                                @if (permissions.Count == 0)
+                                {
+                                    <p class="muted">No permissions configured. All capabilities are denied by default.</p>
+                                }
+                                else
+                                {
+                                    <table class="permissions-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Agent</th>
+                                                <th>Capability</th>
+                                                <th>Granted</th>
+                                                <th>Confirm</th>
+                                                <th>Path Scope</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var perm in permissions)
+                                            {
+                                                <tr>
+                                                    <td>@perm.AgentName</td>
+                                                    <td><code>@perm.Capability</code></td>
+                                                    <td><span class="@(perm.IsGranted ? "perm-granted" : "perm-denied")">@(perm.IsGranted ? "✓" : "✗")</span></td>
+                                                    <td>@(perm.RequireConfirm ? "yes" : "—")</td>
+                                                    <td>@(perm.PathScope is { Length: > 0 } ps ? string.Join(", ", ps) : "—")</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                            </div>
+
+                            @* Tool log *@
+                            <div class="detail-section">
+                                <h4 class="detail-section-title">Recent Tool Calls</h4>
+                                @if (toolLog.Count == 0)
+                                {
+                                    <p class="muted">No tool calls recorded yet.</p>
+                                }
+                                else
+                                {
+                                    <table class="tool-log-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Time (SAST)</th>
+                                                <th>Agent</th>
+                                                <th>Tool</th>
+                                                <th>Result</th>
+                                                <th>Duration</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var entry in toolLog)
+                                            {
+                                                <tr class="@(entry.Success == false ? "log-row-fail" : "")">
+                                                    <td class="log-time">@FormatSast(entry.CreatedAt)</td>
+                                                    <td>@(entry.AgentName ?? "—")</td>
+                                                    <td><code>@(entry.ToolName ?? "—")</code></td>
+                                                    <td>
+                                                        @if (entry.Success == true)
+                                                        {
+                                                            <span class="result-ok">ok</span>
+                                                        }
+                                                        else if (entry.Success == false)
+                                                        {
+                                                            <span class="result-fail" title="@entry.ErrorMessage">fail</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="muted">—</span>
+                                                        }
+                                                    </td>
+                                                    <td>@(entry.DurationMs.HasValue ? $"{entry.DurationMs}ms" : "—")</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                            </div>
+
+                            <div class="device-actions">
+                                <button class="btn-danger-sm"
+                                        @onclick="() => ConfirmDeleteAsync(device)">
+                                    Unregister device
+                                </button>
+                            </div>
+
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+</div>
+
+@* Add Device modal *@
+@if (showAddModal)
+{
+    <div class="modal-backdrop" @onclick="CloseAddModal">
+        <div class="modal-box" @onclick:stopPropagation>
+            <h3>Add Device</h3>
+
+            @if (newDeviceToken is null)
+            {
+                <p>Enter a name for the new device (e.g. "Gert's Laptop").</p>
+                <div class="form-group">
+                    <label>Device name</label>
+                    <input class="form-input" @bind="newDeviceName" placeholder="My Laptop" />
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" @onclick="CloseAddModal">Cancel</button>
+                    <button class="btn-primary" @onclick="CreateDeviceAsync"
+                            disabled="@string.IsNullOrWhiteSpace(newDeviceName)">
+                        Generate Token
+                    </button>
+                </div>
+            }
+            else
+            {
+                <p>Token generated. Run this command on your laptop to register:</p>
+                <div class="code-block">
+                    <pre>laptop-host --register @newDeviceToken</pre>
+                </div>
+                <p class="muted">Token expires: @newTokenExpiry?.ToString("dd MMM yyyy HH:mm") SAST</p>
+                <p>Download the LAH binary for your OS:</p>
+                <div class="download-links">
+                    <span>Linux — <code>dotnet publish src/LaptopHost -p:PublishProfile=linux-x64</code></span>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-primary" @onclick="CloseAddModalAndRefresh">Done</button>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid? DeviceId { get; set; }
+
+    private List<DeviceDto>            devices      = [];
+    private List<DevicePermissionDto>  permissions  = [];
+    private List<DeviceToolLogDto>     toolLog      = [];
+    private Guid?                      selectedDeviceId;
+    private bool                       isLoading    = true;
+
+    private bool    showAddModal   = false;
+    private string  newDeviceName  = "";
+    private string? newDeviceToken;
+    private DateTimeOffset? newTokenExpiry;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDevicesAsync();
+
+        // Auto-expand if route includes device ID
+        if (DeviceId.HasValue)
+        {
+            selectedDeviceId = DeviceId.Value;
+            await LoadDeviceDetailAsync(DeviceId.Value);
+        }
+    }
+
+    private async Task LoadDevicesAsync()
+    {
+        isLoading = true;
+        devices   = await Api.GetDevicesAsync();
+        isLoading = false;
+    }
+
+    private async Task ToggleDevice(Guid id)
+    {
+        if (selectedDeviceId == id)
+        {
+            selectedDeviceId = null;
+            permissions      = [];
+            toolLog          = [];
+        }
+        else
+        {
+            selectedDeviceId = id;
+            await LoadDeviceDetailAsync(id);
+        }
+    }
+
+    private async Task LoadDeviceDetailAsync(Guid id)
+    {
+        permissions = await Api.GetDevicePermissionsAsync(id);
+        toolLog     = await Api.GetDeviceLogAsync(id, limit: 50);
+    }
+
+    private void OpenAddModal()
+    {
+        newDeviceName  = "";
+        newDeviceToken = null;
+        newTokenExpiry = null;
+        showAddModal   = true;
+    }
+
+    private void CloseAddModal() => showAddModal = false;
+
+    private async Task CloseAddModalAndRefresh()
+    {
+        showAddModal = false;
+        await LoadDevicesAsync();
+    }
+
+    private async Task CreateDeviceAsync()
+    {
+        if (string.IsNullOrWhiteSpace(newDeviceName)) return;
+        var result = await Api.RegisterDeviceAsync(newDeviceName);
+        if (result is not null)
+        {
+            newDeviceToken = result.RegistrationToken;
+            newTokenExpiry = result.TokenExpiresAt
+                .ToOffset(TimeSpan.FromHours(2)); // SAST = UTC+2
+        }
+    }
+
+    private async Task ConfirmDeleteAsync(DeviceDto device)
+    {
+        // Simple confirm — a future iteration can use a proper modal
+        var deleted = await Api.DeleteDeviceAsync(device.Id);
+        if (deleted)
+        {
+            if (selectedDeviceId == device.Id)
+                selectedDeviceId = null;
+            await LoadDevicesAsync();
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static string OsIcon(string? platform) => platform?.ToLower() switch
+    {
+        "linux"   => "🐧",
+        "windows" => "🪟",
+        "macos"   => "🍎",
+        _         => "💻"
+    };
+
+    private static string FormatRelative(DateTimeOffset dt)
+    {
+        var age = DateTimeOffset.UtcNow - dt;
+        if (age.TotalMinutes < 2)  return "just now";
+        if (age.TotalHours   < 1)  return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalDays    < 1)  return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+
+    private static string FormatSast(DateTimeOffset dt) =>
+        dt.ToOffset(TimeSpan.FromHours(2)).ToString("HH:mm:ss dd MMM");
+}

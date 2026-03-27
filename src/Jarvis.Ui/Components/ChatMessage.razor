@@ -40,7 +40,7 @@ else
             </div>
             <div class="message-time-below agent-time">
                 @FormatTime(Message.CreatedAt)
-                <ModelPill Provider="@Message.Provider" Model="@Message.Model" />
+                <ModelPill Provider="@Message.Provider" Model="@Message.Model" EscalatedFrom="@Message.EscalatedFrom" />
             </div>
         </div>
     </div>

@@ -1,0 +1,50 @@
+using {{AgentName}}.Agent.SystemPrompts;
+using {{AgentName}}.Agent.Tools;
+{{#if IsStateful}}
+using {{AgentName}}.Agent.Data;
+{{/if}}
+using Mediahost.Agents.Services;
+using Mediahost.Llm.Services;
+
+namespace {{AgentName}}.Agent.Services;
+
+{{#if IsStateful}}
+public sealed class {{AgentName}}AgentService : BaseAgentService
+{
+    public {{AgentName}}AgentService(
+        LlmService llm,
+        {{AgentName}}ToolExecutor executor,
+        {{AgentName}}MemoryService memory,
+        ILogger<{{AgentName}}AgentService> logger)
+        : base(llm, executor, memory, logger) { }
+
+    protected override string AgentName       => "{{AgentNameLower}}";
+    protected override string BaseSystemPrompt => {{AgentName}}SystemPrompt.Prompt;
+    protected override int    MaxTokens        => 8192;
+}
+{{/if}}
+{{#if IsStateless}}
+using Mediahost.Agents.Base;
+using Mediahost.Llm.Models;
+
+public sealed class {{AgentName}}AgentService : AgentBase
+{
+    private readonly {{AgentName}}ToolExecutor _executor;
+    private readonly ILogger<{{AgentName}}AgentService> _logger;
+
+    public {{AgentName}}AgentService(
+        LlmService llm,
+        {{AgentName}}ToolExecutor executor,
+        ILogger<{{AgentName}}AgentService> logger)
+        : base(llm, logger)
+    {
+        _executor = executor;
+        _logger = logger;
+    }
+
+    protected override string AgentName       => "{{AgentNameLower}}";
+    protected override string SystemPrompt    => {{AgentName}}SystemPrompt.Prompt;
+    protected override int    MaxTokens       => 8192;
+    protected override IAgentToolExecutor ToolExecutor => _executor;
+}
+{{/if}}

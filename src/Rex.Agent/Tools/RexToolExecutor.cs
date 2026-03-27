@@ -2,7 +2,9 @@ using System.Text.Json;
 using Mediahost.Agents.Services;
 using Mediahost.Llm.Models;
 using Rex.Agent.Data;
+using Rex.Agent.Data.Repositories;
 using Rex.Agent.Services;
+using StackExchange.Redis;
 
 namespace Rex.Agent.Tools;
 
@@ -12,6 +14,16 @@ public class RexToolExecutor(
     ContainerService containers,
     DeveloperAgentService devAgent,
     RexMemoryService memory,
+    ScaffoldingPlanService scaffoldingPlan,
+    AgentScaffoldingService scaffolding,
+    AgentMetadataService agentMetadata,
+    AgentCodeUpdateService codeUpdate,
+    ScaffoldingSessionRepository scaffoldingRepo,
+    ScaffoldedAgentRepository scaffoldedRepo,
+    PortRegistryRepository portRegistry,
+    AgentUpdateRepository updateRepo,
+    IConnectionMultiplexer redis,
+    IConfiguration config,
     ILogger<RexToolExecutor> logger) : IAgentToolExecutor
 {
     public IReadOnlyList<ToolDefinition> GetTools() => RexToolDefinitions.GetTools();
@@ -71,6 +83,24 @@ public class RexToolExecutor(
                 // Memory
                 "remember_fact" => await RememberFactAsync(input, ct),
                 "forget_fact"   => await ForgetFactAsync(input, ct),
+
+                // Agent Scaffolding
+                "intake_agent"             => await IntakeAgentAsync(input, ct),
+                "save_intake_answers"      => await SaveIntakeAnswersAsync(input, ct),
+                "present_scaffolding_plan" => await PresentScaffoldingPlanAsync(input, ct),
+                "approve_scaffolding"      => await ApproveScaffoldingAsync(input, ct),
+                "list_scaffolded_agents"   => await ListScaffoldedAgentsAsync(input, ct),
+                "list_port_registry"       => await ListPortRegistryAsync(ct),
+
+                // Agent Lifecycle
+                "get_agent_info"           => await GetAgentInfoAsync(input, ct),
+                "update_agent_metadata"    => await UpdateAgentMetadataAsync(input, ct),
+                "plan_agent_code_update"   => await PlanAgentCodeUpdateAsync(input, ct),
+                "execute_agent_code_update"=> await ExecuteAgentCodeUpdateAsync(input, ct),
+                "soft_retire_agent"        => await SoftRetireAgentAsync(input, ct),
+                "hard_retire_agent"        => await HardRetireAgentAsync(input, ct),
+                "reactivate_agent"         => await ReactivateAgentAsync(input, ct),
+                "list_agents"              => await ListAgentsAsync(input, ct),
 
                 _ => Err($"Unknown tool: {toolName}")
             };
@@ -411,6 +441,243 @@ public class RexToolExecutor(
         var key = RequireString(input, "key");
         await memory.ForgetFactAsync(key, ct);
         return Ok(new { forgotten = true, key });
+    }
+
+    // ── Agent Scaffolding ───────────────────────────────────────────────────────
+
+    private async Task<string> IntakeAgentAsync(JsonDocument input, CancellationToken ct)
+    {
+        var description = RequireString(input, "description");
+        var sessionId   = await scaffoldingRepo.CreateSessionAsync(description);
+
+        var intakeForm = config["Rex:ScaffoldingRoot"] is { } root
+            ? await File.ReadAllTextAsync(Path.Combine(root, "templates/intake/questions.md"), ct)
+            : ScaffoldingIntakeQuestions.Default;
+
+        return Ok(new
+        {
+            session_id = sessionId,
+            message    = $"Scaffolding session created. Please answer the following intake questions and call save_intake_answers when done.",
+            intake_form = intakeForm,
+        });
+    }
+
+    private async Task<string> SaveIntakeAnswersAsync(JsonDocument input, CancellationToken ct)
+    {
+        var sessionId   = Guid.Parse(RequireString(input, "session_id"));
+        var answersText = RequireString(input, "answers_json");
+
+        // Accept either raw JSON or plain text answers — wrap plain text in JSON
+        string answersJson;
+        try
+        {
+            JsonDocument.Parse(answersText);
+            answersJson = answersText;
+        }
+        catch
+        {
+            answersJson = JsonSerializer.Serialize(new { raw_answers = answersText });
+        }
+
+        var doc = JsonDocument.Parse(answersJson);
+        await scaffoldingRepo.UpdateIntakeAnswersAsync(sessionId, doc);
+
+        // Also store raw text on session for plan service parsing
+        await scaffoldingRepo.UpdateIntakeAnswersAsync(sessionId,
+            JsonDocument.Parse(JsonSerializer.Serialize(new { raw = answersText })));
+
+        return Ok(new
+        {
+            session_id = sessionId,
+            message    = "Intake answers saved. Call present_scaffolding_plan to review the plan before approving.",
+        });
+    }
+
+    private async Task<string> PresentScaffoldingPlanAsync(JsonDocument input, CancellationToken ct)
+    {
+        var sessionId = Guid.Parse(RequireString(input, "session_id"));
+        var plan      = await scaffoldingPlan.BuildPlanAsync(sessionId, ct);
+        return Ok(new
+        {
+            session_id = sessionId,
+            plan,
+            message = "Review the plan above. Call approve_scaffolding with the session_id to proceed.",
+        });
+    }
+
+    private async Task<string> ApproveScaffoldingAsync(JsonDocument input, CancellationToken ct)
+    {
+        var sessionId = Guid.Parse(RequireString(input, "session_id"));
+        await scaffoldingRepo.ApproveAsync(sessionId);
+
+        logger.LogInformation("Scaffolding approved for session {Id}, starting scaffold", sessionId);
+        var result = await scaffolding.ScaffoldAsync(sessionId, ct);
+
+        return result.Success
+            ? Ok(new
+              {
+                  success    = true,
+                  agent_name = result.AgentName,
+                  port       = result.Port,
+                  message    = $"{result.AgentName} scaffolded successfully on port {result.Port}.",
+              })
+            : Err($"Scaffolding failed for {result.AgentName}: {result.ErrorMessage}");
+    }
+
+    private async Task<string> ListScaffoldedAgentsAsync(JsonDocument input, CancellationToken ct)
+    {
+        var limit = GetInt(input, "limit") ?? 10;
+        var rows  = await scaffoldedRepo.GetRecentAsync(limit);
+        return Ok(new { count = rows.Count(), agents = rows });
+    }
+
+    private async Task<string> ListPortRegistryAsync(CancellationToken ct)
+    {
+        var ports = await portRegistry.GetAllAsync();
+        return Ok(new { count = ports.Count(), ports });
+    }
+
+    // ── Agent Lifecycle ────────────────────────────────────────────────────────
+
+    private async Task<string> GetAgentInfoAsync(JsonDocument input, CancellationToken ct)
+    {
+        var agentName = RequireString(input, "agent_name");
+        var info      = await agentMetadata.GetAgentInfoAsync(agentName);
+        return info == null ? Err($"Agent '{agentName}' not found.") : Ok(info);
+    }
+
+    private async Task<string> UpdateAgentMetadataAsync(JsonDocument input, CancellationToken ct)
+    {
+        var agentName = RequireString(input, "agent_name");
+        var field     = RequireString(input, "field");
+        var value     = RequireString(input, "value");
+
+        var (success, message) = await agentMetadata.UpdateMetadataAsync(agentName, field, value, ct);
+        return success ? Ok(new { success = true, agent_name = agentName, field, value, message })
+                       : Err(message);
+    }
+
+    private async Task<string> PlanAgentCodeUpdateAsync(JsonDocument input, CancellationToken ct)
+    {
+        var agentName   = RequireString(input, "agent_name");
+        var changeDesc  = RequireString(input, "change_description");
+        var plan        = await codeUpdate.PlanCodeUpdateAsync(agentName, changeDesc, ct);
+        return Ok(new
+        {
+            agent_name = agentName,
+            plan,
+            message = "Review the plan above. Call execute_agent_code_update to proceed.",
+        });
+    }
+
+    private async Task<string> ExecuteAgentCodeUpdateAsync(JsonDocument input, CancellationToken ct)
+    {
+        var agentName      = RequireString(input, "agent_name");
+        var planSummary    = RequireString(input, "plan_summary");
+        var filesToModify  = input.RootElement.TryGetProperty("files_to_modify", out var filesEl)
+            ? filesEl.EnumerateArray().Select(e => e.GetString()!).ToArray()
+            : Array.Empty<string>();
+
+        // Confirmation gate for hand-built agents
+        if (!await IsScaffoldedAgent(agentName))
+        {
+            var confirmKey = $"code_update_confirm:{agentName.ToLower()}";
+            var db2        = redis.GetDatabase();
+            var confirmed  = await db2.KeyExistsAsync(confirmKey);
+            if (!confirmed)
+            {
+                await db2.StringSetAsync(confirmKey, "1", TimeSpan.FromMinutes(5));
+                return Ok(new
+                {
+                    requires_confirm = true,
+                    message = $"⚠️ {agentName} is a hand-built agent. This will modify its source code and restart the container. Call execute_agent_code_update again within 5 minutes to confirm.",
+                    agent_name = agentName,
+                });
+            }
+            await db2.KeyDeleteAsync(confirmKey);
+        }
+
+        var result = await codeUpdate.ExecuteCodeUpdateAsync(agentName, planSummary, filesToModify, ct);
+        return result.Success
+            ? Ok(new { success = true, agent_name = agentName, commit_sha = result.CommitSha, message = $"Code update complete. Commit: {result.CommitSha}" })
+            : Err($"Code update failed: {result.ErrorMessage}");
+    }
+
+    private async Task<string> SoftRetireAgentAsync(JsonDocument input, CancellationToken ct)
+    {
+        var agentName = RequireString(input, "agent_name");
+        var confirm   = GetBool(input, "confirm") ?? false;
+
+        if (!await IsScaffoldedAgent(agentName) && !confirm)
+        {
+            return Ok(new
+            {
+                requires_confirm = true,
+                message = $"⚠️ {agentName} is a hand-built agent. Set confirm=true to proceed with soft-retire.",
+                agent_name = agentName,
+            });
+        }
+
+        var (success, message) = await scaffolding.SoftRetireAsync(agentName, ct);
+        return success ? Ok(new { success = true, agent_name = agentName, message })
+                       : Err(message);
+    }
+
+    private async Task<string> HardRetireAgentAsync(JsonDocument input, CancellationToken ct)
+    {
+        var agentName  = RequireString(input, "agent_name");
+        var dropSchema = GetBool(input, "drop_schema") ?? false;
+        var confirm    = GetBool(input, "confirm") ?? false;
+
+        // Protect core agents unconditionally
+        var coreAgents = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "rex", "jarvis", "andrew" };
+        if (coreAgents.Contains(agentName))
+            return Err($"Hard-retiring {agentName} is not permitted. Escalate to Gert if this is truly required.");
+
+        // Always require explicit confirm=true
+        if (!confirm)
+        {
+            return Ok(new
+            {
+                requires_confirm = true,
+                message = $"⚠️ Hard-retiring {agentName} will archive its source and{(dropSchema ? " drop its database schema and" : "")} remove it from docker-compose. This is irreversible. Repeat the call with confirm=true to proceed.",
+                agent_name  = agentName,
+                drop_schema = dropSchema,
+            });
+        }
+
+        var (success, message) = await scaffolding.HardRetireAsync(agentName, dropSchema, ct);
+        return success ? Ok(new { success = true, agent_name = agentName, message })
+                       : Err(message);
+    }
+
+    private async Task<string> ReactivateAgentAsync(JsonDocument input, CancellationToken ct)
+    {
+        var agentName    = RequireString(input, "agent_name");
+        var (success, message) = await scaffolding.ReactivateAsync(agentName, ct);
+        return success ? Ok(new { success = true, agent_name = agentName, message })
+                       : Err(message);
+    }
+
+    private async Task<string> ListAgentsAsync(JsonDocument input, CancellationToken ct)
+    {
+        var includeRetired = GetBool(input, "include_retired") ?? false;
+        var agents         = await agentMetadata.ListAgentsAsync(includeRetired);
+        return Ok(new { count = agents.Count(), agents });
+    }
+
+    private async Task<bool> IsScaffoldedAgent(string agentName)
+    {
+        try
+        {
+            var info = await agentMetadata.GetAgentInfoAsync(agentName);
+            if (info is null) return false;
+            // info is an anonymous object — check via JSON
+            var json = JsonSerializer.Serialize(info);
+            return json.Contains("\"was_scaffolded\":true", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

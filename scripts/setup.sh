@@ -84,3 +84,77 @@ echo "     podman compose up -d"
 echo "  5. Open Jarvis:  https://$AI_DOMAIN"
 echo ""
 echo "  For production TLS: bash scripts/get-certs.sh"
+echo ""
+
+# ─── Phase 4: Create Jarvis admin user ───────────────────────────────────────
+# Run after postgres is healthy and 004_phase4.sql has been applied.
+create_jarvis_admin() {
+  echo "=== Creating Jarvis admin user ==="
+
+  # Check if bcrypt python module is available
+  if ! python3 -c "import bcrypt" 2>/dev/null; then
+    echo "Installing bcrypt Python module..."
+    pip3 install bcrypt --quiet
+  fi
+
+  # Generate a random 20-character alphanumeric password
+  ADMIN_PASS=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 20)
+
+  # Generate bcrypt hash at cost 12
+  ADMIN_HASH=$(python3 -c "
+import bcrypt, sys
+pw = sys.argv[1].encode()
+print(bcrypt.hashpw(pw, bcrypt.gensalt(12)).decode())
+" "$ADMIN_PASS")
+
+  # Insert admin user and assign admin role
+  podman exec -i mediahost-ai-postgres psql -U mediahostai -d mediahostai <<SQL
+INSERT INTO jarvis_schema.users (username, display_name, email, password_hash)
+VALUES ('gert', 'Gert', 'gert@mediahost.co.za', '$ADMIN_HASH')
+ON CONFLICT (username) DO UPDATE
+  SET password_hash = EXCLUDED.password_hash,
+      display_name  = EXCLUDED.display_name;
+
+INSERT INTO jarvis_schema.user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM jarvis_schema.users u, jarvis_schema.roles r
+WHERE u.username = 'gert' AND r.role_name = 'admin'
+ON CONFLICT DO NOTHING;
+SQL
+
+  echo ""
+  echo "╔══════════════════════════════════════════════════════╗"
+  echo "║  Jarvis Admin Password (save this — shown ONCE):    ║"
+  echo "║                                                      ║"
+  echo "║  Username: gert                                      ║"
+  printf  "║  Password: %-42s║\n" "$ADMIN_PASS"
+  echo "║                                                      ║"
+  echo "║  Change this password after first login.             ║"
+  echo "╚══════════════════════════════════════════════════════╝"
+  echo ""
+}
+
+# Only create admin if the users table exists (i.e. 004_phase4.sql has been applied)
+USER_TABLE_EXISTS=$(podman exec mediahost-ai-postgres psql -U mediahostai -d mediahostai -tAc \
+  "SELECT 1 FROM information_schema.tables WHERE table_schema='jarvis_schema' AND table_name='users'" 2>/dev/null || echo "")
+
+if [ "$USER_TABLE_EXISTS" = "1" ]; then
+  # Check if admin user already exists
+  ADMIN_EXISTS=$(podman exec mediahost-ai-postgres psql -U mediahostai -d mediahostai -tAc \
+    "SELECT 1 FROM jarvis_schema.users WHERE username='gert'" 2>/dev/null || echo "")
+
+  if [ "$ADMIN_EXISTS" = "1" ]; then
+    echo "ℹ  Jarvis admin user 'gert' already exists. To reset password, re-run: bash scripts/setup.sh --reset-admin"
+  else
+    create_jarvis_admin
+  fi
+elif [ "${1}" = "--create-admin" ]; then
+  echo "ERROR: 004_phase4.sql has not been applied yet. Run:"
+  echo "  podman exec -i mediahost-ai-postgres psql -U mediahostai -d mediahostai < db/init/004_phase4.sql"
+  exit 1
+fi
+
+# Allow forced password reset
+if [ "${1}" = "--reset-admin" ]; then
+  create_jarvis_admin
+fi

@@ -1,3 +1,4 @@
+using Mediahost.Agents.Alerting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Quartz;
@@ -28,6 +29,7 @@ public class ServiceCheckJob(IServiceScopeFactory scopeFactory, ILogger<ServiceC
         var checkRepo   = scope.ServiceProvider.GetRequiredService<CheckResultRepository>();
         var alertRepo   = scope.ServiceProvider.GetRequiredService<AlertRepository>();
         var serviceRepo = scope.ServiceProvider.GetRequiredService<WatchedServiceRepository>();
+        var dispatcher  = scope.ServiceProvider.GetRequiredService<IAlertDispatchService>();
 
         WatchedService? service;
         try
@@ -85,12 +87,32 @@ public class ServiceCheckJob(IServiceScopeFactory scopeFactory, ILogger<ServiceC
                     };
                     await alertRepo.InsertAsync(alert);
                     logger.LogWarning("[Rocky] Alert raised for service '{Name}': {Detail}", name, result.Detail);
+
+                    await dispatcher.DispatchAsync(new AlertPayload(
+                        AgentName: "Rocky",
+                        AlertType: "service_down",
+                        Severity:  "high",
+                        Title:     $"Service '{service.DisplayName}' is down",
+                        Body:      result.Detail ?? "",
+                        SourceUrl: null,
+                        AlertId:   alert.Id
+                    ), context.CancellationToken);
                 }
             }
             else
             {
                 // Resolve any open alerts
                 await alertRepo.ResolveAsync(serviceId);
+
+                await dispatcher.DispatchAsync(new AlertPayload(
+                    AgentName: "Rocky",
+                    AlertType: "service_recovered",
+                    Severity:  "low",
+                    Title:     $"✅ Resolved: '{service.DisplayName}'",
+                    Body:      "Service has recovered.",
+                    SourceUrl: null,
+                    AlertId:   Guid.NewGuid()
+                ), context.CancellationToken);
             }
         }
         catch (Exception ex)

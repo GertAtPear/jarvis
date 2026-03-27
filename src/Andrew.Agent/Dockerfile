@@ -6,6 +6,7 @@ WORKDIR /src
 COPY src/Mediahost.Shared/Mediahost.Shared.csproj     src/Mediahost.Shared/
 COPY src/Mediahost.Vault/Mediahost.Vault.csproj       src/Mediahost.Vault/
 COPY src/Mediahost.Llm/Mediahost.Llm.csproj           src/Mediahost.Llm/
+COPY src/Mediahost.Tools/Mediahost.Tools.csproj       src/Mediahost.Tools/
 COPY src/Mediahost.Agents/Mediahost.Agents.csproj     src/Mediahost.Agents/
 COPY src/Andrew.Agent/Andrew.Agent.csproj             src/Andrew.Agent/
 RUN dotnet restore src/Andrew.Agent/Andrew.Agent.csproj -r linux-x64
@@ -14,6 +15,7 @@ RUN dotnet restore src/Andrew.Agent/Andrew.Agent.csproj -r linux-x64
 COPY src/Mediahost.Shared/  src/Mediahost.Shared/
 COPY src/Mediahost.Vault/   src/Mediahost.Vault/
 COPY src/Mediahost.Llm/     src/Mediahost.Llm/
+COPY src/Mediahost.Tools/   src/Mediahost.Tools/
 COPY src/Mediahost.Agents/  src/Mediahost.Agents/
 COPY src/Andrew.Agent/      src/Andrew.Agent/
 RUN dotnet publish src/Andrew.Agent/Andrew.Agent.csproj \

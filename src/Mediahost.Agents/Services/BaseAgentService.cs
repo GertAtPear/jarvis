@@ -65,6 +65,44 @@ public abstract class BaseAgentService(
               },
               "required": ["url"]
             }
+            """)),
+
+        new ToolDefinition(
+            "remember_fact",
+            "Store a permanent fact in your long-term memory. " +
+            "Use this to remember important information across conversations, such as server topology, " +
+            "baseline thresholds, known-good configurations, or user preferences.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "A short identifier for the fact (e.g. 'broadcast_db', 'wan_primary_normal_rtt_ms')"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The value to store"
+                }
+              },
+              "required": ["key", "value"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "forget_fact",
+            "Remove a previously stored fact from long-term memory.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "The key of the fact to remove"
+                }
+              },
+              "required": ["key"]
+            }
             """))
     ];
 
@@ -91,6 +129,8 @@ public abstract class BaseAgentService(
         var allTools    = agentTools.Concat(SharedTools).ToList();
         var toolCallCount = 0;
         string? finalResponse = null;
+        ModelContext? currentModel = null;
+        string? escalatedFrom = null;
 
         // Build system prompt: base + permanent facts + any agent-specific context
         var systemPrompt = BaseSystemPrompt;
@@ -114,7 +154,14 @@ public abstract class BaseAgentService(
             LlmResponse response;
             try
             {
-                response = (await llm.CompleteAsync(AgentName, request, sid, ct)).Response;
+                LlmServiceResponse svcResponse;
+                if (currentModel is not null && escalatedFrom is not null)
+                    svcResponse = await llm.CompleteWithContextAsync(AgentName, request, currentModel, escalatedFrom, sid, ct);
+                else
+                    svcResponse = await llm.CompleteAsync(AgentName, request, sid, ct);
+
+                response = svcResponse.Response;
+                currentModel = svcResponse.ModelUsed;
             }
             catch (Exception ex)
             {
@@ -155,6 +202,8 @@ public abstract class BaseAgentService(
                         "web_search" => "Web search is handled by the AI provider natively. " +
                                         "Use fetch_page to read a specific URL.",
                         "fetch_page" => await FetchPageAsync(toolUse.Input, ct),
+                        "remember_fact" => await RememberFactAsync(toolUse.Input, ct),
+                        "forget_fact"   => await ForgetFactAsync(toolUse.Input, ct),
                         _            => await executor.ExecuteAsync(toolUse.Name, toolUse.Input, ct)
                     };
                 }
@@ -167,6 +216,27 @@ public abstract class BaseAgentService(
             }
 
             history.Add(new LlmMessage("tool_result", toolResults));
+
+            // Mid-task escalation: if a tool result is very large, upgrade to a more capable model
+            const int EscalationThresholdChars = 160_000; // ~40k tokens
+            if (escalatedFrom is null && currentModel?.EscalateAsync is not null)
+            {
+                var largestResultLen = toolResults
+                    .OfType<ToolResultContent>()
+                    .Max(r => r.Result.Length);
+
+                if (largestResultLen > EscalationThresholdChars)
+                {
+                    logger.LogInformation(
+                        "[{Agent}] Escalating model (tool result {Len:N0} chars > threshold). Current: {Model}",
+                        AgentName, largestResultLen, currentModel.Model);
+
+                    var escalatedModel = await currentModel.EscalateAsync(
+                        new EscalationReason($"Tool result ~{largestResultLen:N0} chars", null));
+                    escalatedFrom = currentModel.Model;
+                    currentModel  = escalatedModel;
+                }
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(finalResponse))
@@ -175,7 +245,7 @@ public abstract class BaseAgentService(
             catch (Exception ex) { logger.LogWarning(ex, "[{Agent}] Failed to save turn for session {Session}", AgentName, sid); }
         }
 
-        return new AgentResponse(finalResponse ?? "", sid, toolCallCount);
+        return new AgentResponse(finalResponse ?? "", sid, toolCallCount, escalatedFrom);
     }
 
     private static async Task<string> FetchPageAsync(JsonDocument input, CancellationToken ct)
@@ -210,6 +280,25 @@ public abstract class BaseAgentService(
         {
             return $"{{\"error\": \"Failed to fetch page: {ex.Message.Replace("\"", "'")}\"}}";
         }
+    }
+
+    private async Task<string> RememberFactAsync(JsonDocument input, CancellationToken ct)
+    {
+        var key   = input.RootElement.TryGetProperty("key",   out var k) ? k.GetString() ?? "" : "";
+        var value = input.RootElement.TryGetProperty("value", out var v) ? v.GetString() ?? "" : "";
+        if (string.IsNullOrWhiteSpace(key))
+            return "{\"error\": \"key is required\"}";
+        await memory.RememberFactAsync(key, value, ct);
+        return $"{{\"stored\": \"{key}\"}}";
+    }
+
+    private async Task<string> ForgetFactAsync(JsonDocument input, CancellationToken ct)
+    {
+        var key = input.RootElement.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
+        if (string.IsNullOrWhiteSpace(key))
+            return "{\"error\": \"key is required\"}";
+        await memory.ForgetFactAsync(key, ct);
+        return $"{{\"removed\": \"{key}\"}}";
     }
 
     private static string StripHtml(string html)

@@ -486,6 +486,200 @@ public static class RexToolDefinitions
               },
               "required": ["key"]
             }
+            """)),
+
+        // ── Agent Scaffolding ─────────────────────────────────────────────────
+
+        new ToolDefinition(
+            "intake_agent",
+            "Start a new agent scaffolding session and return the 6-question intake form",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "description": { "type": "string", "description": "Brief description of the new agent's purpose" }
+              },
+              "required": ["description"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "save_intake_answers",
+            "Save completed intake answers for a scaffolding session",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "session_id":   { "type": "string", "description": "Scaffolding session UUID" },
+                "answers_json": { "type": "string", "description": "JSON string or plain text with answers to all 6 intake questions" }
+              },
+              "required": ["session_id", "answers_json"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "present_scaffolding_plan",
+            "Build and return the full scaffolding plan for review before approval",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "session_id": { "type": "string", "description": "Scaffolding session UUID" }
+              },
+              "required": ["session_id"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "approve_scaffolding",
+            "Approve the scaffolding plan and execute the full agent scaffold",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "session_id": { "type": "string", "description": "Scaffolding session UUID to approve and execute" }
+              },
+              "required": ["session_id"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "list_scaffolded_agents",
+            "List recent agent scaffolding history",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "limit": { "type": "number", "description": "Number of recent entries to return (default 10)" }
+              }
+            }
+            """)),
+
+        new ToolDefinition(
+            "list_port_registry",
+            "List all port assignments for all agents",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {}
+            }
+            """)),
+
+        // ── Agent Lifecycle ───────────────────────────────────────────────────
+
+        new ToolDefinition(
+            "get_agent_info",
+            "Get full details for an agent including scaffolding history and recent updates",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "agent_name": { "type": "string", "description": "Name of the agent" }
+              },
+              "required": ["agent_name"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "update_agent_metadata",
+            "Update a metadata field on an agent (description, routing_keywords, department, system_prompt_override, display_name, notes)",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "agent_name": { "type": "string", "description": "Agent to update" },
+                "field":      { "type": "string", "description": "Field to update: description | routing_keywords | department | system_prompt_override | display_name | notes" },
+                "value":      { "type": "string", "description": "New value for the field" }
+              },
+              "required": ["agent_name", "field", "value"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "plan_agent_code_update",
+            "Read the agent's source files and produce an implementation plan for a code change",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "agent_name":         { "type": "string", "description": "Agent to update" },
+                "change_description": { "type": "string", "description": "Description of the code change required" }
+              },
+              "required": ["agent_name", "change_description"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "execute_agent_code_update",
+            "Execute an approved code change on an agent: develop files, build, restart, commit, push",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "agent_name":      { "type": "string", "description": "Agent to update" },
+                "plan_summary":    { "type": "string", "description": "Short summary of the change (used as commit message)" },
+                "files_to_modify": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Relative paths (from agent directory) of files to modify"
+                }
+              },
+              "required": ["agent_name", "plan_summary", "files_to_modify"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "soft_retire_agent",
+            "Stop and deactivate an agent without removing source code. Requires CONFIRM gate for hand-built agents.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "agent_name": { "type": "string", "description": "Agent to soft-retire" },
+                "confirm":    { "type": "boolean", "description": "Set to true to confirm retirement of a hand-built agent" }
+              },
+              "required": ["agent_name"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "hard_retire_agent",
+            "Permanently retire an agent: stop container, archive source, remove compose block, optionally drop schema. Always requires CONFIRM gate.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "agent_name":  { "type": "string",  "description": "Agent to hard-retire" },
+                "drop_schema": { "type": "boolean", "description": "Whether to DROP the agent's database schema" },
+                "confirm":     { "type": "boolean", "description": "Must be true to proceed. First call returns a confirmation prompt." }
+              },
+              "required": ["agent_name"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "reactivate_agent",
+            "Reactivate a soft-retired agent: restart container, poll health, update status",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "agent_name": { "type": "string", "description": "Agent to reactivate" }
+              },
+              "required": ["agent_name"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "list_agents",
+            "List all agents with their status, port, department, and scaffolding info",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "include_retired": { "type": "boolean", "description": "Include retired agents (default false)" }
+              }
+            }
             """))
     ];
 }

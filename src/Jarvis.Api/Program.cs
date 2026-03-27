@@ -1,5 +1,7 @@
 using Jarvis.Api.Data;
 using Jarvis.Api.Extensions;
+using Jarvis.Api.Hubs;
+using Mediahost.Auth.Extensions;
 using Serilog;
 
 DapperConfig.Configure();
@@ -14,6 +16,7 @@ builder.Host.UseSerilog((ctx, cfg) =>
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddSignalR();
 
 builder.Services.AddJarvisServices(builder.Configuration);
 
@@ -24,6 +27,8 @@ if (app.Environment.IsDevelopment())
 
 app.UseSerilogRequestLogging();
 app.UseHttpsRedirection();
+app.UseJarvisAuth();
 app.MapControllers();
+app.MapHub<DeviceHub>("/hubs/device");
 
 app.Run();

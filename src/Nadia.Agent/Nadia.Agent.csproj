@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Nadia.Agent</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Mediahost.Agents\Mediahost.Agents.csproj" />
+    <ProjectReference Include="..\Mediahost.Llm\Mediahost.Llm.csproj" />
+    <ProjectReference Include="..\Mediahost.Tools\Mediahost.Tools.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.72" />
+    <PackageReference Include="Npgsql" Version="10.0.2" />
+    <PackageReference Include="Quartz" Version="3.16.1" />
+    <PackageReference Include="Quartz.AspNetCore" Version="3.16.1" />
+  </ItemGroup>
+</Project>

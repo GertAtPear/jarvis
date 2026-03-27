@@ -1,0 +1,79 @@
+using System.Text.Json;
+using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
+using Mediahost.Llm.Models;
+
+namespace {{AgentName}}.Agent.Tools;
+
+/// <summary>
+/// Tool executor for {{AgentName}}. Iterates registered IToolModule chain first,
+/// then dispatches agent-specific tools via switch.
+/// </summary>
+public class {{AgentName}}ToolExecutor(
+    IEnumerable<IToolModule> modules,
+    ILogger<{{AgentName}}ToolExecutor> logger) : IAgentToolExecutor
+{
+    private static readonly JsonSerializerOptions JsonOpts =
+        new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+    public IReadOnlyList<ToolDefinition> GetTools()
+    {
+        var moduleTools = modules.SelectMany(m => m.GetDefinitions()).ToList();
+        moduleTools.AddRange({{AgentName}}ToolDefinitions.GetTools());
+        return moduleTools;
+    }
+
+    public async Task<string> ExecuteAsync(string toolName, JsonDocument input, CancellationToken ct)
+    {
+        // 1. Try registered IToolModule chain first (SSH, browser, laptop, etc.)
+        foreach (var module in modules)
+        {
+            var result = await module.TryExecuteAsync(toolName, input, ct);
+            if (result is not null)
+                return result;
+        }
+
+        // 2. Agent-specific tools
+        try
+        {
+            return toolName switch
+            {
+                {{ToolCases}}
+                _ => Err($"Unknown tool: {toolName}")
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Tool execution failed: {Tool}", toolName);
+            return Err(ex.Message);
+        }
+    }
+
+    // ── Agent-specific tool implementations ───────────────────────────────────
+
+    {{ToolImplementations}}
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static string RequireString(JsonDocument doc, string key)
+    {
+        if (!doc.RootElement.TryGetProperty(key, out var prop))
+            throw new ArgumentException($"Required parameter '{key}' is missing.");
+        return prop.GetString() ?? throw new ArgumentException($"Parameter '{key}' must not be null.");
+    }
+
+    private static string? GetString(JsonDocument doc, string key) =>
+        doc.RootElement.TryGetProperty(key, out var p) ? p.GetString() : null;
+
+    private static int? GetInt(JsonDocument doc, string key) =>
+        doc.RootElement.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.Number
+            ? p.GetInt32() : null;
+
+    private static bool? GetBool(JsonDocument doc, string key) =>
+        doc.RootElement.TryGetProperty(key, out var p) &&
+        (p.ValueKind == JsonValueKind.True || p.ValueKind == JsonValueKind.False)
+            ? p.GetBoolean() : null;
+
+    private static string Ok(object value)  => JsonSerializer.Serialize(value, JsonOpts);
+    private static string Err(string msg)   => JsonSerializer.Serialize(new { error = msg }, JsonOpts);
+}

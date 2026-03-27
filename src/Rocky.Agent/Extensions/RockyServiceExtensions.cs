@@ -1,5 +1,6 @@
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
+using Rocky.Agent.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Rocky.Agent.Data.Repositories;
@@ -32,7 +33,8 @@ public static class RockyServiceExtensions
         // ── Check executor ────────────────────────────────────────────────────
         services.AddScoped<CheckExecutorService>();
 
-        // ── Agent service ─────────────────────────────────────────────────────
+        // ── Tool executor + agent service ─────────────────────────────────────
+        services.AddScoped<RockyToolExecutor>();
         services.AddScoped<IAgentService, RockyAgentService>();
 
         return services;

@@ -1,0 +1,28 @@
+using Mediahost.Llm.Models;
+
+namespace {{AgentName}}.Agent.Tools;
+
+public static class {{AgentName}}ToolDefinitions
+{
+    public static IReadOnlyList<ToolDefinition> GetTools() =>
+    [
+        {{ToolDefinitions}}
+    ];
+}
+
+// ── Tool definition format example (remove before use) ────────────────────────
+//
+// new ToolDefinition
+// {
+//     Name        = "tool_name",
+//     Description = "What this tool does in one sentence.",
+//     InputSchema = new InputSchema
+//     {
+//         Type     = "object",
+//         Properties = new Dictionary<string, SchemaProperty>
+//         {
+//             ["param_name"] = new() { Type = "string", Description = "What this param is." }
+//         },
+//         Required = ["param_name"]
+//     }
+// }

@@ -23,6 +23,7 @@
     <ProjectReference Include="..\Mediahost.Shared\Mediahost.Shared.csproj" />
     <ProjectReference Include="..\Mediahost.Vault\Mediahost.Vault.csproj" />
     <ProjectReference Include="..\Mediahost.Llm\Mediahost.Llm.csproj" />
+    <ProjectReference Include="..\Mediahost.Auth\Mediahost.Auth.csproj" />
   </ItemGroup>
 
 </Project>

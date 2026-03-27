@@ -10,7 +10,8 @@ public record ChatMessageDto(
     string? Provider,
     string? Model,
     List<AttachmentDto> Attachments,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    string? EscalatedFrom = null
 );
 
 public record PendingAttachment(
@@ -54,13 +55,59 @@ public record ChatResponse(
     List<string> AgentsUsed,
     int          TotalMs,
     bool         IsMorningBriefing,
-    bool         SecretPurged = false
+    bool         SecretPurged = false,
+    string?      EscalatedFrom = null
 );
 
 public record StatusResponse(
     string Status,
     DateTimeOffset CheckedAt
 );
+
+// ── Device DTOs ───────────────────────────────────────────────────────────────
+
+public record DeviceDto(
+    Guid            Id,
+    string          Name,
+    string          DeviceType,
+    string?         OsPlatform,
+    string?         LahVersion,
+    string?         Hostname,
+    string?         IpAddress,
+    bool            IsOnline,
+    string          Status,
+    DateTimeOffset? LastSeenAt,
+    string?         AdvertisedModulesJson,
+    DateTimeOffset  CreatedAt);
+
+public record DevicePermissionDto(
+    Guid        Id,
+    Guid        DeviceId,
+    string      AgentName,
+    string      Capability,
+    bool        IsGranted,
+    bool        RequireConfirm,
+    string[]?   PathScope,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
+
+public record DeviceToolLogDto(
+    Guid            Id,
+    Guid?           DeviceId,
+    string?         AgentName,
+    string?         ToolName,
+    bool?           Success,
+    string?         ErrorMessage,
+    int?            DurationMs,
+    bool            ConfirmedByUser,
+    DateTimeOffset  CreatedAt);
+
+public record RegisterDeviceRequestDto(string Name, string? OsPlatform = null);
+
+public record RegisterDeviceResponseDto(
+    Guid    DeviceId,
+    string  RegistrationToken,
+    DateTimeOffset TokenExpiresAt);
 
 /// <summary>File data passed from JavaScript paste/drop handlers.</summary>
 public class FilePayload

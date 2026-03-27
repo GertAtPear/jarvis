@@ -1,22 +1,33 @@
 @if (!string.IsNullOrEmpty(Model))
 {
-    <span class="model-pill">✦ @ShortName</span>
+    @if (!string.IsNullOrEmpty(EscalatedFrom))
+    {
+        <span class="model-pill model-pill--escalated" title="Escalated from @ShortModel(EscalatedFrom) due to large context">
+            ✦ @ShortModel(EscalatedFrom) → @ShortModel(Model)
+        </span>
+    }
+    else
+    {
+        <span class="model-pill">✦ @ShortModel(Model)</span>
+    }
 }
 
 @code {
-    [Parameter] public string? Provider { get; set; }
-    [Parameter] public string? Model    { get; set; }
+    [Parameter] public string? Provider      { get; set; }
+    [Parameter] public string? Model         { get; set; }
+    [Parameter] public string? EscalatedFrom { get; set; }
 
-    private string ShortName => Model switch
+    private static string ShortModel(string? model) => model switch
     {
-        "claude-sonnet-4-6" => "Sonnet",
-        "claude-opus-4-6"   => "Opus",
-        "claude-haiku-4-5"  => "Haiku",
-        "gemini-1.5-pro"    => "Gemini Pro",
-        "gemini-1.5-flash"  => "Gemini Flash",
-        "gemini-2.0-flash"  => "Gemini 2.0",
-        "gpt-4o"            => "GPT-4o",
-        "gpt-4o-mini"       => "GPT-4o mini",
+        "claude-sonnet-4-6"        => "Sonnet",
+        "claude-opus-4-6"          => "Opus",
+        "claude-haiku-4-5-20251001" => "Haiku",
+        "claude-haiku-4-5"         => "Haiku",
+        "gemini-1.5-pro"           => "Gemini Pro",
+        "gemini-1.5-flash"         => "Gemini Flash",
+        "gemini-2.0-flash"         => "Gemini 2.0",
+        "gpt-4o"                   => "GPT-4o",
+        "gpt-4o-mini"              => "GPT-4o mini",
         string m when m.Length > 12 => m[..12],
         string m => m,
         null => ""

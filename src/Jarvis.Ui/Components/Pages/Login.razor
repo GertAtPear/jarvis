@@ -1,0 +1,141 @@
+@page "/login"
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@using System.Net.Http.Json
+@using Jarvis.Ui.Auth
+@inject JarvisAuthStateProvider AuthState
+@inject IHttpClientFactory HttpFactory
+@inject IConfiguration Config
+@inject NavigationManager Nav
+
+<PageTitle>Login — Jarvis</PageTitle>
+
+<div class="login-container">
+    <div class="login-card">
+        <div class="login-logo">
+            <span>J</span>
+        </div>
+        <h1>Jarvis</h1>
+        <p class="login-subtitle">Sign in to continue</p>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="login-error">@_error</div>
+        }
+
+        <div class="login-form">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input id="username" type="text" @bind="_username"
+                       @onkeydown="OnKeyDown" placeholder="gert" autocomplete="username" />
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input id="password" type="password" @bind="_password"
+                       @onkeydown="OnKeyDown" placeholder="••••••••" autocomplete="current-password" />
+            </div>
+            <button class="login-btn @(_loading ? "loading" : "")"
+                    @onclick="DoLoginAsync" disabled="@_loading">
+                @if (_loading) { <span>Signing in…</span> } else { <span>Sign in</span> }
+            </button>
+        </div>
+    </div>
+</div>
+
+<style>
+    .login-container {
+        display: flex; align-items: center; justify-content: center;
+        height: 100vh; background: var(--bg-primary, #0A0E1A);
+    }
+    .login-card {
+        background: var(--bg-secondary, #141824); border-radius: 12px;
+        padding: 2.5rem 2rem; width: 360px; text-align: center;
+        border: 1px solid var(--border, #1e2535);
+    }
+    .login-logo {
+        width: 56px; height: 56px; border-radius: 12px; background: var(--accent, #4f8cff);
+        display: flex; align-items: center; justify-content: center;
+        margin: 0 auto 1rem; font-size: 1.5rem; font-weight: 700; color: #fff;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 0.25rem; color: var(--text-primary, #e8eaf0); }
+    .login-subtitle { color: var(--text-secondary, #8892a8); margin: 0 0 1.5rem; font-size: 0.875rem; }
+    .login-error {
+        background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+        color: #f87171; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem;
+        font-size: 0.875rem;
+    }
+    .form-group { margin-bottom: 1rem; text-align: left; }
+    .form-group label { display: block; font-size: 0.8rem; color: var(--text-secondary, #8892a8); margin-bottom: 0.3rem; }
+    .form-group input {
+        width: 100%; box-sizing: border-box; padding: 0.6rem 0.75rem;
+        background: var(--bg-primary, #0A0E1A); border: 1px solid var(--border, #1e2535);
+        border-radius: 8px; color: var(--text-primary, #e8eaf0); font-size: 0.95rem;
+    }
+    .form-group input:focus { outline: none; border-color: var(--accent, #4f8cff); }
+    .login-btn {
+        width: 100%; padding: 0.7rem; border: none; border-radius: 8px;
+        background: var(--accent, #4f8cff); color: #fff; font-size: 1rem;
+        font-weight: 600; cursor: pointer; margin-top: 0.5rem; transition: opacity 0.2s;
+    }
+    .login-btn:hover { opacity: 0.9; }
+    .login-btn.loading { opacity: 0.6; cursor: not-allowed; }
+</style>
+
+@code {
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    private string? ReturnUrl { get; set; }
+
+    private string _username = "";
+    private string _password = "";
+    private string _error    = "";
+    private bool   _loading  = false;
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await DoLoginAsync();
+    }
+
+    private async Task DoLoginAsync()
+    {
+        if (_loading) return;
+        _error   = "";
+        _loading = true;
+
+        try
+        {
+            var baseUrl = Config["JarvisApi:BaseUrl"]?.TrimEnd('/') ?? "http://localhost:5000";
+            var http    = HttpFactory.CreateClient();
+            var resp    = await http.PostAsJsonAsync($"{baseUrl}/api/auth/login",
+                new { username = _username, password = _password });
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error = "Invalid username or password.";
+                return;
+            }
+
+            var result = await resp.Content.ReadFromJsonAsync<LoginResult>();
+            if (result == null)
+            {
+                _error = "Unexpected response from server.";
+                return;
+            }
+
+            await AuthState.LoginAsync(result.Token, new UserInfo(
+                result.User.Id, result.User.Username, result.User.DisplayName, result.User.Roles));
+
+            var dest = string.IsNullOrEmpty(ReturnUrl) ? "/" : Uri.UnescapeDataString(ReturnUrl);
+            Nav.NavigateTo(dest);
+        }
+        catch (Exception ex)
+        {
+            _error = "Login failed. Please try again.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private record LoginResult(string Token, DateTimeOffset ExpiresAt, LoginUser User);
+    private record LoginUser(Guid Id, string Username, string? DisplayName, string[] Roles);
+}

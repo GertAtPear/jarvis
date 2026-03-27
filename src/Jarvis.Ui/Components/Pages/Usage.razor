@@ -1,0 +1,283 @@
+@page "/usage"
+@using Jarvis.Ui.Models
+@using Jarvis.Ui.Services
+@inject UsageApiService UsageApi
+@inject ILogger<Usage> Logger
+@rendermode InteractiveServer
+
+<PageTitle>LLM Usage Dashboard</PageTitle>
+
+<div class="usage-page">
+    <div class="usage-header">
+        <h2>LLM Usage</h2>
+
+        <div class="date-range-picker">
+            <label>From: <input type="date" @bind="FromDate" @bind:after="LoadDataAsync" /></label>
+            <label>To: <input type="date" @bind="ToDate" @bind:after="LoadDataAsync" /></label>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <p class="loading-text">Loading...</p>
+    }
+    else
+    {
+        <!-- KPI Cards -->
+        @if (_summary is not null)
+        {
+            <div class="kpi-row">
+                <div class="kpi-card">
+                    <div class="kpi-label">Requests</div>
+                    <div class="kpi-value">@_summary.TotalRequests.ToString("N0")</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Input Tokens</div>
+                    <div class="kpi-value">@FormatTokens(_summary.TotalInputTokens)</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Output Tokens</div>
+                    <div class="kpi-value">@FormatTokens(_summary.TotalOutputTokens)</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Est. Cost (USD)</div>
+                    <div class="kpi-value">$@_summary.EstimatedCostUsd.ToString("F4")</div>
+                </div>
+                <div class="kpi-card @(_summary.EscalationCount > 0 ? "kpi-card--accent" : "")">
+                    <div class="kpi-label">Escalations</div>
+                    <div class="kpi-value">@_summary.EscalationCount</div>
+                </div>
+            </div>
+        }
+
+        <!-- By Agent -->
+        @if (_byAgent.Count > 0)
+        {
+            <div class="usage-section">
+                <h3>Usage by Agent</h3>
+                <table class="usage-table">
+                    <thead><tr><th>Agent</th><th>Requests</th><th>Input Tokens</th><th>Output Tokens</th><th>Est. Cost</th></tr></thead>
+                    <tbody>
+                        @foreach (var a in _byAgent)
+                        {
+                            <tr>
+                                <td>@a.AgentName</td>
+                                <td>@a.Requests.ToString("N0")</td>
+                                <td>@FormatTokens(a.InputTokens)</td>
+                                <td>@FormatTokens(a.OutputTokens)</td>
+                                <td>$@a.EstimatedCostUsd.ToString("F4")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <!-- Daily usage (simple table) -->
+        @if (_daily.Count > 0)
+        {
+            <div class="usage-section">
+                <h3>Daily Usage</h3>
+                <table class="usage-table">
+                    <thead><tr><th>Date</th><th>Provider</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in _daily.OrderByDescending(x => x.Date))
+                        {
+                            <tr>
+                                <td>@d.Date</td>
+                                <td>@d.Provider</td>
+                                <td>@d.Requests.ToString("N0")</td>
+                                <td>@FormatTokens(d.InputTokens)</td>
+                                <td>@FormatTokens(d.OutputTokens)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <!-- Routing Analytics -->
+        @if (_routing.Count > 0)
+        {
+            <div class="usage-section">
+                <h3>Routing Analytics</h3>
+                <table class="usage-table">
+                    <thead><tr><th>Rule</th><th>Provider</th><th>Model</th><th>Fires</th><th>% of Total</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in _routing)
+                        {
+                            <tr class="@(r.Fires == 0 ? "row--warning" : "")">
+                                <td>@(r.RuleName ?? "(no rule)")</td>
+                                <td>@r.Provider</td>
+                                <td>@r.ModelId</td>
+                                <td>@r.Fires</td>
+                                <td>@r.PctOfTotal.ToString("F1")%</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <!-- Escalations -->
+        @if (_escalations.Count > 0)
+        {
+            <div class="usage-section">
+                <h3>Model Escalations</h3>
+                <table class="usage-table">
+                    <thead><tr><th>Agent</th><th>From</th><th>To</th><th>Time</th></tr></thead>
+                    <tbody>
+                        @foreach (var e in _escalations)
+                        {
+                            <tr>
+                                <td>@e.AgentName</td>
+                                <td class="model-from">@e.FromModel</td>
+                                <td>→ @e.ToModel</td>
+                                <td>@e.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <!-- Slowest Requests -->
+        @if (_slowest.Count > 0)
+        {
+            <div class="usage-section">
+                <h3>Slowest Requests (Top 20)</h3>
+                <table class="usage-table">
+                    <thead><tr><th>Agent</th><th>Model</th><th>Duration</th><th>Task Type</th><th>Time</th></tr></thead>
+                    <tbody>
+                        @foreach (var s in _slowest)
+                        {
+                            <tr>
+                                <td>@s.AgentName</td>
+                                <td>@s.ModelId</td>
+                                <td class="@(s.DurationMs > 30000 ? "cell--warning" : "")">@((s.DurationMs / 1000.0).ToString("F1"))s</td>
+                                <td>@(s.TaskType ?? "-")</td>
+                                <td>@s.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <!-- Routing Rules Editor -->
+        <details class="usage-section collapsible">
+            <summary><h3>Routing Rules</h3></summary>
+            <div class="rules-actions">
+                <button class="btn-secondary" @onclick="InvalidateCacheAsync">Invalidate Cache</button>
+                @if (_cacheInvalidated) { <span class="success-msg">Cache invalidated</span> }
+            </div>
+            @if (_rules.Count > 0)
+            {
+                <table class="usage-table">
+                    <thead><tr><th>Priority</th><th>Rule Name</th><th>Agent</th><th>Provider</th><th>Model</th><th>Active</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in _rules)
+                        {
+                            <tr class="@(!r.IsActive ? "row--muted" : "")">
+                                <td>@r.Priority</td>
+                                <td>@r.RuleName</td>
+                                <td>@(r.AgentName ?? "*")</td>
+                                <td>@r.ProviderName</td>
+                                <td>@r.ModelId</td>
+                                <td>@(r.IsActive ? "✓" : "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </details>
+
+        <!-- Cost Rates -->
+        <details class="usage-section collapsible">
+            <summary><h3>Cost Rates (Estimates Only)</h3></summary>
+            <p class="muted-note">Cost estimates are approximate. Update rates when providers change pricing.</p>
+            @if (_costRates.Count > 0)
+            {
+                <table class="usage-table">
+                    <thead><tr><th>Provider</th><th>Model</th><th>$/1k Input</th><th>$/1k Output</th><th>Since</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in _costRates)
+                        {
+                            <tr>
+                                <td>@r.ProviderName</td>
+                                <td>@r.ModelId</td>
+                                <td>@r.InputCostPer1k.ToString("F6")</td>
+                                <td>@r.OutputCostPer1k.ToString("F6")</td>
+                                <td>@r.EffectiveFrom.ToString("yyyy-MM-dd")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </details>
+    }
+</div>
+
+@code {
+    private DateOnly FromDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-6));
+    private DateOnly ToDate   { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+
+    private bool _loading = true;
+    private bool _cacheInvalidated;
+
+    private UsageSummaryDto?         _summary;
+    private List<DailyUsageDto>      _daily       = [];
+    private List<AgentUsageDto>      _byAgent     = [];
+    private List<RoutingAnalyticDto> _routing     = [];
+    private List<EscalationRecordDto> _escalations = [];
+    private List<SlowRequestDto>     _slowest     = [];
+    private List<RoutingRuleDto>     _rules       = [];
+    private List<CostRateDto>        _costRates   = [];
+
+    protected override async Task OnInitializedAsync()
+        => await LoadDataAsync();
+
+    private async Task LoadDataAsync()
+    {
+        _loading = true;
+        _cacheInvalidated = false;
+        StateHasChanged();
+
+        try
+        {
+            var tasks = new Task[]
+            {
+                Task.Run(async () => _summary     = await UsageApi.GetSummaryAsync(FromDate, ToDate)),
+                Task.Run(async () => _daily       = await UsageApi.GetDailyAsync(FromDate, ToDate)),
+                Task.Run(async () => _byAgent     = await UsageApi.GetByAgentAsync(FromDate, ToDate)),
+                Task.Run(async () => _routing     = await UsageApi.GetRoutingAnalyticsAsync(FromDate, ToDate)),
+                Task.Run(async () => _escalations = await UsageApi.GetEscalationsAsync(FromDate, ToDate)),
+                Task.Run(async () => _slowest     = await UsageApi.GetSlowestAsync()),
+                Task.Run(async () => _rules       = await UsageApi.GetRoutingRulesAsync()),
+                Task.Run(async () => _costRates   = await UsageApi.GetCostRatesAsync()),
+            };
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Usage dashboard load failed");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task InvalidateCacheAsync()
+    {
+        await UsageApi.InvalidateCacheAsync();
+        _cacheInvalidated = true;
+    }
+
+    private static string FormatTokens(int tokens) => tokens >= 1_000_000
+        ? $"{tokens / 1_000_000.0:F1}M"
+        : tokens >= 1_000
+            ? $"{tokens / 1_000.0:F1}k"
+            : tokens.ToString();
+}

@@ -1,0 +1,33 @@
+  # ─── {{AgentName}} — {{AgentRole}} ────────────────────────────────────────────
+
+  {{AgentNameLower}}-agent:
+    build:
+      context: .
+      dockerfile: src/{{AgentName}}.Agent/Dockerfile
+    container_name: {{AgentNameLower}}-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:{{Port}}
+      ConnectionStrings__Postgres: Host=localhost;Port=5432;Database=mediahostai;Username=mediahostai;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: localhost:6379,password=${REDIS_PASSWORD}
+      Infisical__BaseUrl: ${INFISICAL_BASE_URL:-http://localhost:8080}
+      Infisical__ClientId: ${INFISICAL_CLIENT_ID}
+      Infisical__ClientSecret: ${INFISICAL_CLIENT_SECRET}
+      Infisical__ProjectId: ${INFISICAL_PROJECT_ID}
+      {{AgentName}}__TimeZone: Africa/Johannesburg
+    {{#if HasHostNetwork}}
+    network_mode: host
+    cap_add:
+      - NET_RAW
+    {{/if}}
+    volumes:
+      - ./logs/{{AgentNameLower}}:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{{Port}}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

@@ -15,6 +15,9 @@ public sealed class ModelSelectorService(
     private DateTime _cacheExpiry = DateTime.MinValue;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
+    /// <summary>Forces the routing rules cache to refresh on the next request.</summary>
+    public void InvalidateCache() => _cacheExpiry = DateTime.MinValue;
+
     public async Task<ModelContext> SelectModelAsync(
         TaskClassification classification, CancellationToken ct)
     {
@@ -44,8 +47,7 @@ public sealed class ModelSelectorService(
                 SelectionReason: rule.Reason ?? $"Matched rule: {rule.RuleName}",
                 RuleApplied:     rule.RuleName,
                 MaxTokens:       rule.MaxOutputTokens,
-                EscalateAsync:   _ => throw new NotSupportedException(
-                                      "Model escalation is a Phase 3 feature.")));
+                EscalateAsync:   null)); // assigned below once full list is known
 
             if (result.Count >= 3) break;
         }
@@ -56,14 +58,19 @@ public sealed class ModelSelectorService(
                 classification.AgentName, classification.Complexity, classification.TaskType);
 
             result.Add(new ModelContext("anthropic", "claude-sonnet-4-6",
-                "Default fallback — no rule matched", null, 16000,
-                _ => throw new NotSupportedException("Model escalation is a Phase 3 feature.")));
+                "Default fallback — no rule matched", null, 16000));
             result.Add(new ModelContext("google", "gemini-2.0-flash",
-                "Built-in fallback 1", null, 8000,
-                _ => throw new NotSupportedException("Model escalation is a Phase 3 feature.")));
+                "Built-in fallback 1", null, 8000));
             result.Add(new ModelContext("openai", "gpt-4o",
-                "Built-in fallback 2", null, 4096,
-                _ => throw new NotSupportedException("Model escalation is a Phase 3 feature.")));
+                "Built-in fallback 2", null, 4096));
+        }
+
+        // Assign escalation delegates now that the full candidate list is known
+        var snapshot = result.ToList(); // capture without delegates
+        for (var i = 0; i < result.Count; i++)
+        {
+            var current = result[i];
+            result[i] = current with { EscalateAsync = BuildEscalateDelegate(snapshot, current) };
         }
 
         return result;
@@ -124,6 +131,42 @@ public sealed class ModelSelectorService(
         {
             _lock.Release();
         }
+    }
+
+    /// <summary>
+    /// Builds an escalation delegate for mid-task model upgrades.
+    /// Prefers <paramref name="reason"/>.PreferredProvider when specified,
+    /// otherwise picks the first candidate with a different provider, then
+    /// any candidate with a different model. Returns current (no further
+    /// escalation) if no better option exists.
+    /// </summary>
+    private static Func<EscalationReason, Task<ModelContext>> BuildEscalateDelegate(
+        List<ModelContext> candidates, ModelContext current)
+    {
+        return reason =>
+        {
+            var preferred = reason.PreferredProvider;
+            ModelContext? escalated = null;
+
+            // 1. Preferred provider explicitly requested (e.g. "google" for large context)
+            if (preferred is not null)
+                escalated = candidates.FirstOrDefault(c =>
+                    string.Equals(c.Provider, preferred, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(c.Model, current.Model, StringComparison.OrdinalIgnoreCase));
+
+            // 2. Any different provider (typically higher-tier fallback)
+            escalated ??= candidates.FirstOrDefault(c =>
+                !string.Equals(c.Provider, current.Provider, StringComparison.OrdinalIgnoreCase));
+
+            // 3. Any different model (same provider, different tier)
+            escalated ??= candidates.FirstOrDefault(c =>
+                !string.Equals(c.Model, current.Model, StringComparison.OrdinalIgnoreCase));
+
+            // Return without further escalation capability to prevent loops
+            return Task.FromResult(escalated is not null
+                ? escalated with { EscalateAsync = null }
+                : current  with { EscalateAsync = null });
+        };
     }
 
     private sealed class RoutingRule

@@ -93,6 +93,45 @@ public sealed class LlmService(
     }
 
     /// <summary>
+    /// Calls a specific model context directly (bypasses classify/select).
+    /// Used for mid-task escalation when a tool result exceeds context limits.
+    /// </summary>
+    public async Task<LlmServiceResponse> CompleteWithContextAsync(
+        string agentName,
+        LlmRequest request,
+        ModelContext modelCtx,
+        string escalatedFrom,
+        Guid? sessionId = null,
+        CancellationToken ct = default)
+    {
+        if (!_providers.TryGetValue(modelCtx.Provider, out var provider))
+            throw new InvalidOperationException(
+                $"LLM provider '{modelCtx.Provider}' is not registered.");
+
+        var effectiveRequest = request.MaxTokens.HasValue
+            ? request
+            : request with { MaxTokens = modelCtx.MaxTokens };
+
+        var sw = Stopwatch.StartNew();
+        var response = await provider.CompleteAsync(modelCtx.Model, effectiveRequest, ct);
+        sw.Stop();
+
+        _ = Task.Run(async () => await usageLogger.LogAsync(
+            agentName,
+            modelCtx.Provider,
+            modelCtx.Model,
+            null,
+            modelCtx.RuleApplied,
+            response.Usage.InputTokens,
+            response.Usage.OutputTokens,
+            (int)sw.ElapsedMilliseconds,
+            sessionId,
+            escalatedFrom), CancellationToken.None);
+
+        return new LlmServiceResponse(response, modelCtx, escalatedFrom);
+    }
+
+    /// <summary>
     /// Returns true for errors where switching to another provider is worth trying:
     /// rate limits (HTTP 429), Anthropic overload (HTTP 529), and provider-specific
     /// rate-limit exception types.
@@ -124,4 +163,4 @@ public sealed class LlmService(
     }
 }
 
-public record LlmServiceResponse(LlmResponse Response, ModelContext ModelUsed);
+public record LlmServiceResponse(LlmResponse Response, ModelContext ModelUsed, string? EscalatedFrom = null);

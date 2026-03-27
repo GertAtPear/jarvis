@@ -1,5 +1,6 @@
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
 using Rex.Agent.Data;
 using Rex.Agent.Data.Repositories;
 using Rex.Agent.Services;
@@ -22,12 +23,24 @@ public static class RexServiceExtensions
         // ── Repositories ──────────────────────────────────────────────────────────
         services.AddScoped<ProjectRepository>();
         services.AddScoped<DevSessionRepository>();
+        services.AddScoped<ScaffoldingSessionRepository>();
+        services.AddScoped<ScaffoldedAgentRepository>();
+        services.AddScoped<PortRegistryRepository>();
+        services.AddScoped<AgentUpdateRepository>();
 
         // ── Services ──────────────────────────────────────────────────────────────
         services.AddScoped<GitService>();
         services.AddScoped<GitHubService>();
         services.AddSingleton<ContainerService>();
         services.AddScoped<DeveloperAgentService>();
+        services.AddScoped<ScaffoldingPlanService>();
+        services.AddScoped<AgentScaffoldingService>();
+        services.AddScoped<AgentMetadataService>();
+        services.AddScoped<AgentCodeUpdateService>();
+
+        // ── Laptop + Browser tools ────────────────────────────────────────────────
+        services.AddScoped<IToolModule, LaptopModule>();
+        services.AddScoped<IToolModule, BrowserModule>();
 
         // ── Tool executor and agent service ───────────────────────────────────────
         services.AddScoped<RexToolExecutor>();

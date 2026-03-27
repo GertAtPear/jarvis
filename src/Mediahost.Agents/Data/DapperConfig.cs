@@ -8,6 +8,7 @@ public static class DapperConfig
 {
     public static void Configure()
     {
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
         SqlMapper.AddTypeHandler(new DateOnlyHandler());
         SqlMapper.AddTypeHandler(new TimeOnlyHandler());
         SqlMapper.AddTypeHandler(new JsonDocumentHandler());

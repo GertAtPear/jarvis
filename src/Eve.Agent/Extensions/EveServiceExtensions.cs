@@ -3,6 +3,7 @@ using Eve.Agent.Services;
 using Eve.Agent.Tools;
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
 
 namespace Eve.Agent.Extensions;
 
@@ -21,6 +22,9 @@ public static class EveServiceExtensions
         // ── Core services ─────────────────────────────────────────────────────────
         services.AddScoped<MorningBriefingGeneratorService>();
         services.AddScoped<GoogleCalendarService>();
+
+        // ── Laptop tools ──────────────────────────────────────────────────────────
+        services.AddScoped<IToolModule, LaptopModule>();
 
         // ── Tool executor ─────────────────────────────────────────────────────────
         services.AddScoped<EveToolExecutor>();

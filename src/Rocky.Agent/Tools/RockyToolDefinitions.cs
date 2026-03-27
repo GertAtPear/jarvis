@@ -115,6 +115,36 @@ public static class RockyToolDefinitions
               },
               "required": ["server", "process"]
             }
+            """)),
+
+        // ── Alert Channels ────────────────────────────────────────────────────
+
+        new ToolDefinition(
+            "list_alert_channels",
+            "List all configured alert channels (Slack, email) for alert dispatch.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {}
+            }
+            """)),
+
+        new ToolDefinition(
+            "configure_alert_channel",
+            "Create or update an alert channel for Slack webhook or email notifications.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "channel_name":      { "type": "string", "description": "Unique name for this channel (e.g. 'slack-ops', 'email-oncall')" },
+                "channel_type":      { "type": "string", "description": "Channel type: slack | email" },
+                "config_json":       { "type": "string", "description": "JSON config: Slack needs {\"webhook_url_secret\":\"/path\"}, email needs {\"to\":[\"addr\"],\"smtp_secret\":\"/path\"}" },
+                "min_severity":      { "type": "string", "description": "Minimum severity to dispatch: low | medium | high | critical (default: high)" },
+                "agent_filter":      { "type": "string", "description": "Comma-separated agent names to filter (empty = all agents)" },
+                "alert_type_filter": { "type": "string", "description": "Comma-separated alert types to filter (empty = all types)" }
+              },
+              "required": ["channel_name", "channel_type", "config_json"]
+            }
             """))
     ];
 }

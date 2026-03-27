@@ -1,11 +1,14 @@
 using Jarvis.Api.Data;
 using Jarvis.Api.Services;
+using Mediahost.Auth.Extensions;
 using Mediahost.Llm.Extensions;
 using Mediahost.Vault.Extensions;
 using Npgsql;
 using StackExchange.Redis;
+using AgentsDbFactory = Mediahost.Agents.Data.DbConnectionFactory;
 
 namespace Jarvis.Api.Extensions;
+
 
 public static class JarvisServiceExtensions
 {
@@ -46,6 +49,18 @@ public static class JarvisServiceExtensions
         services.AddScoped<AttachmentService>();
         services.AddScoped<MorningBriefingService>();
         services.AddScoped<JarvisOrchestratorService>();
+        services.AddScoped<UsageAnalyticsService>();
+        services.AddScoped<RoutingRulesService>();
+
+        // ── Device management (Local Agent Host) ─────────────────────────────
+        services.AddScoped<DeviceRepository>();
+        services.AddSingleton<DeviceConnectionTracker>();
+        services.AddSingleton<IDeviceToolForwarder, DeviceToolForwarder>();
+
+        // ── Auth ─────────────────────────────────────────────────────────────
+        // Register Mediahost.Agents.Data.DbConnectionFactory for UserRepository
+        services.AddSingleton<AgentsDbFactory>();
+        services.AddMediahostAuth();
 
         return services;
     }

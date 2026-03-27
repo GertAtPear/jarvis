@@ -12,5 +12,10 @@
     <Project Path="src/Mediahost.Shared/Mediahost.Shared.csproj" />
     <Project Path="src/Mediahost.Vault/Mediahost.Vault.csproj" />
     <Project Path="src/Rocky.Agent/Rocky.Agent.csproj" />
+    <Project Path="src/LaptopHost/LaptopHost.csproj" />
+    <Project Path="src/Sam.Agent/Sam.Agent.csproj" />
+    <Project Path="src/Nadia.Agent/Nadia.Agent.csproj" />
+    <Project Path="src/Lexi.Agent/Lexi.Agent.csproj" />
+    <Project Path="src/Mediahost.Auth/Mediahost.Auth.csproj" />
   </Folder>
 </Solution>

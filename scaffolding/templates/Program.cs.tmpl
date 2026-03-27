@@ -1,0 +1,24 @@
+using {{AgentName}}.Agent.Controllers;
+using {{AgentName}}.Agent.Extensions;
+using Mediahost.Agents.Data;
+using Mediahost.Vault.Extensions;
+
+DapperConfig.Configure();
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddOpenApi();
+builder.Services.AddInfisicalVault(builder.Configuration);
+builder.Services.Add{{AgentName}}Services(builder.Configuration);
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+    app.MapOpenApi();
+
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", agent = "{{AgentNameLower}}" }))
+   .WithName("Health");
+
+app.Map{{AgentName}}Endpoints();
+
+app.Run();

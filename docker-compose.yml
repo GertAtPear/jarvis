@@ -128,6 +128,13 @@ services:
       Agents__BrowserBaseUrl: http://browser-agent:5004
       Agents__RexBaseUrl: http://rex-agent:5005
       Agents__RockyBaseUrl: http://host.containers.internal:5006
+      Agents__SamBaseUrl: http://localhost:5007
+      Agents__NadiaBaseUrl: http://localhost:5008
+      Agents__LexiBaseUrl: http://localhost:5009
+      Auth__TokenExpiryHours: 12
+      Auth__AdminUsername: gert
+    ports:
+      - "127.0.0.1:5010:5000"
     networks:
       - mediahost-ai
     volumes:
@@ -223,6 +230,7 @@ services:
       Rex__WorkspacePath: /workspace
       Rex__ProjectPath: /project
       Rex__PodmanSocket: /run/podman/podman.sock
+      Rex__ScaffoldingRoot: /scaffolding
       Rex__GitUserName: Rex Agent
       Rex__GitUserEmail: rex@mediahost.ai
     volumes:
@@ -230,6 +238,7 @@ services:
       - /home/gert/Documents/Projects/Pear:/workspace
       - .:/project
       - /run/user/1000/podman/podman.sock:/run/podman/podman.sock:z
+      - ./scaffolding:/scaffolding:ro
     networks:
       - mediahost-ai
 
@@ -282,6 +291,7 @@ services:
       Andrew__Discovery__IntervalHours: 4
       Andrew__Ssh__TimeoutSeconds: 10
       Andrew__Ssh__MaxParallelConnections: 5
+      Jarvis__BaseUrl: http://localhost:5010
     network_mode: host
     # Andrew uses host networking so it can reach your LAN/VPN servers directly.
     # NOTE: On host network, other services reach Andrew at localhost:5001
@@ -289,6 +299,84 @@ services:
       - NET_RAW   # required for ping (ICMP raw sockets)
     volumes:
       - ./logs/andrew:/app/logs
+      - ./ssh-keys:/app/ssh-keys:ro
+
+  sam-agent:
+    build:
+      context: .
+      dockerfile: src/Sam.Agent/Dockerfile
+    container_name: sam-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5007
+      ConnectionStrings__Postgres: Host=localhost;Port=5432;Database=mediahostai;Username=mediahostai;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: localhost:6379,password=${REDIS_PASSWORD}
+      Infisical__BaseUrl: http://localhost:8080
+      Infisical__ClientId: ${INFISICAL_CLIENT_ID}
+      Infisical__ClientSecret: ${INFISICAL_CLIENT_SECRET}
+      Infisical__ProjectId: ${INFISICAL_PROJECT_ID}
+      Infisical__Environment: prod
+    network_mode: host
+    # Sam uses host networking so it can reach external MySQL/PostgreSQL servers on the LAN.
+    volumes:
+      - ./logs/sam:/app/logs
+
+  nadia-agent:
+    build:
+      context: .
+      dockerfile: src/Nadia.Agent/Dockerfile
+    container_name: nadia-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5008
+      ConnectionStrings__Postgres: Host=localhost;Port=5432;Database=mediahostai;Username=mediahostai;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: localhost:6379,password=${REDIS_PASSWORD}
+      Infisical__BaseUrl: http://localhost:8080
+      Infisical__ClientId: ${INFISICAL_CLIENT_ID}
+      Infisical__ClientSecret: ${INFISICAL_CLIENT_SECRET}
+      Infisical__ProjectId: ${INFISICAL_PROJECT_ID}
+      Infisical__Environment: prod
+    network_mode: host
+    # Nadia uses host networking to reach LAN/VPN interfaces directly for latency probing.
+    cap_add:
+      - NET_RAW   # required for ping (ICMP raw sockets)
+    volumes:
+      - ./logs/nadia:/app/logs
+      - ./ssh-keys:/app/ssh-keys:ro
+
+  lexi-agent:
+    build:
+      context: .
+      dockerfile: src/Lexi.Agent/Dockerfile
+    container_name: lexi-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5009
+      ConnectionStrings__Postgres: Host=localhost;Port=5432;Database=mediahostai;Username=mediahostai;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: localhost:6379,password=${REDIS_PASSWORD}
+      Infisical__BaseUrl: http://localhost:8080
+      Infisical__ClientId: ${INFISICAL_CLIENT_ID}
+      Infisical__ClientSecret: ${INFISICAL_CLIENT_SECRET}
+      Infisical__ProjectId: ${INFISICAL_PROJECT_ID}
+      Infisical__Environment: prod
+    network_mode: host
+    # Lexi uses host networking for port scanning and SSH access to servers.
+    cap_add:
+      - NET_RAW   # required for nmap/ping and raw network device scans
+    volumes:
+      - ./logs/lexi:/app/logs
       - ./ssh-keys:/app/ssh-keys:ro
 
   # ─── NGINX REVERSE PROXY ──────────────────────────────────────────────────

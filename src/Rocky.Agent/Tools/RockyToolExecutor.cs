@@ -1,16 +1,18 @@
 using System.Text.Json;
+using Dapper;
 using Mediahost.Agents.Capabilities;
 using Mediahost.Tools.Models;
 using Microsoft.Extensions.Logging;
+using Rocky.Agent.Data;
 using Rocky.Agent.Data.Repositories;
 using Rocky.Agent.Models;
 using Rocky.Agent.Services;
+using StackExchange.Redis;
 
 namespace Rocky.Agent.Tools;
 
 /// <summary>
-/// Executes the 8 Rocky tools. Injected into RockyAgentService.
-/// All tools are strictly read-only.
+/// Executes Rocky tools. Injected into RockyAgentService.
 /// </summary>
 public class RockyToolExecutor(
     WatchedServiceRepository serviceRepo,
@@ -19,6 +21,8 @@ public class RockyToolExecutor(
     HttpCapability http,
     SshCapability ssh,
     DockerCapability docker,
+    DbConnectionFactory db,
+    IConnectionMultiplexer redis,
     ILogger<RockyToolExecutor> logger)
 {
     private static readonly JsonSerializerOptions Opts =
@@ -41,6 +45,8 @@ public class RockyToolExecutor(
                 "run_tcp_check"         => await RunTcpCheckAsync(parameters, ct),
                 "run_container_check"   => await RunContainerCheckAsync(parameters, ct),
                 "run_ssh_process_check" => await RunSshProcessCheckAsync(parameters, ct),
+                "list_alert_channels"   => await ListAlertChannelsAsync(ct),
+                "configure_alert_channel" => await ConfigureAlertChannelAsync(parameters, ct),
                 _ => Err($"Unknown tool: {toolName}")
             };
         }
@@ -263,6 +269,83 @@ public class RockyToolExecutor(
             pattern   = processPattern,
             is_running = running,
             processes
+        });
+    }
+
+    // ── Alert Channels ────────────────────────────────────────────────────────
+
+    private async Task<string> ListAlertChannelsAsync(CancellationToken ct)
+    {
+        await using var conn = db.Create();
+        var channels = await conn.QueryAsync("""
+            SELECT channel_name, channel_type, min_severity,
+                   agent_filter, alert_type_filter, is_active, created_at
+            FROM jarvis_schema.alert_channels
+            ORDER BY created_at
+            """);
+        var list = channels.ToList();
+        return Ok(new { count = list.Count, channels = list });
+    }
+
+    private async Task<string> ConfigureAlertChannelAsync(
+        IReadOnlyDictionary<string, JsonElement> p, CancellationToken ct)
+    {
+        var channelName     = Str(p, "channel_name");
+        var channelType     = Str(p, "channel_type");
+        var configJson      = Str(p, "config_json");
+        var minSeverity     = p.TryGetValue("min_severity", out var ms) ? ms.GetString() : "high";
+        var agentFilter     = p.TryGetValue("agent_filter", out var af) ? af.GetString() : null;
+        var alertTypeFilter = p.TryGetValue("alert_type_filter", out var atf) ? atf.GetString() : null;
+
+        if (channelType != "slack" && channelType != "email")
+            return Err($"Invalid channel_type '{channelType}'. Must be 'slack' or 'email'.");
+
+        // Validate config JSON
+        try { JsonDocument.Parse(configJson); }
+        catch { return Err("config_json is not valid JSON."); }
+
+        // Convert comma-separated filters to arrays
+        var agentArr     = string.IsNullOrWhiteSpace(agentFilter)
+            ? null : agentFilter.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray();
+        var alertTypeArr = string.IsNullOrWhiteSpace(alertTypeFilter)
+            ? null : alertTypeFilter.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray();
+
+        await using var conn = db.Create();
+        await conn.ExecuteAsync("""
+            INSERT INTO jarvis_schema.alert_channels
+                (channel_name, channel_type, config, min_severity, agent_filter, alert_type_filter, is_active)
+            VALUES
+                (@channelName, @channelType, @configJson::jsonb, @minSeverity,
+                 @agentFilter, @alertTypeFilter, true)
+            ON CONFLICT (channel_name) DO UPDATE SET
+                channel_type      = EXCLUDED.channel_type,
+                config            = EXCLUDED.config,
+                min_severity      = EXCLUDED.min_severity,
+                agent_filter      = EXCLUDED.agent_filter,
+                alert_type_filter = EXCLUDED.alert_type_filter,
+                is_active         = true
+            """, new
+        {
+            channelName,
+            channelType,
+            configJson,
+            minSeverity,
+            agentFilter     = agentArr,
+            alertTypeFilter = alertTypeArr,
+        });
+
+        // Invalidate the alert_channels Redis cache
+        var redisDb = redis.GetDatabase();
+        await redisDb.KeyDeleteAsync("alert_channels");
+
+        logger.LogInformation("Alert channel '{Name}' ({Type}) configured", channelName, channelType);
+        return Ok(new
+        {
+            channel_name  = channelName,
+            channel_type  = channelType,
+            min_severity  = minSeverity,
+            active        = true,
+            message       = $"Alert channel '{channelName}' saved. Cache invalidated.",
         });
     }
 
