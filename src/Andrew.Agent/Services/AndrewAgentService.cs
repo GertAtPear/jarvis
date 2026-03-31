@@ -13,8 +13,9 @@ public sealed class AndrewAgentService : BaseAgentService
         LlmService llm,
         AndrewToolExecutor executor,
         AndrewMemoryService memory,
+        SharedMemoryService sharedMemory,
         ILogger<AndrewAgentService> logger)
-        : base(llm, executor, memory, logger) { }
+        : base(llm, executor, memory, sharedMemory, logger) { }
 
     protected override string AgentName => "andrew";
     protected override string BaseSystemPrompt => AndrewSystemPrompt.Prompt;

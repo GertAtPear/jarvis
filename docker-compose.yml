@@ -132,6 +132,7 @@ services:
       Agents__SamBaseUrl: http://localhost:5007
       Agents__NadiaBaseUrl: http://localhost:5008
       Agents__LexiBaseUrl: http://localhost:5009
+      Agents__ResearchBaseUrl: http://localhost:5011
       Auth__TokenExpiryHours: 12
       Auth__AdminUsername: gert
     ports:
@@ -385,6 +386,31 @@ services:
     volumes:
       - ./logs/lexi:/app/logs
       - ./ssh-keys:/app/ssh-keys:ro
+
+  research-agent:
+    build:
+      context: .
+      dockerfile: src/Research.Agent/Dockerfile
+    container_name: research-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:5011
+      ConnectionStrings__Postgres: Host=localhost;Port=5432;Database=mediahostai;Username=mediahostai;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: localhost:6379,password=${REDIS_PASSWORD}
+      Infisical__BaseUrl: http://localhost:8080
+      Infisical__ClientId: ${INFISICAL_CLIENT_ID}
+      Infisical__ClientSecret: ${INFISICAL_CLIENT_SECRET}
+      Infisical__ProjectId: ${INFISICAL_PROJECT_ID}
+      Infisical__Environment: prod
+      Workspace__Path: /agent-workspace
+    network_mode: host
+    volumes:
+      - ./logs/research:/app/logs
+      - agent_workspace:/agent-workspace
 
   # ─── NGINX REVERSE PROXY ──────────────────────────────────────────────────
   # Uncomment nginx together with the app services — nginx requires jarvis-ui:5002

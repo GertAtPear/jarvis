@@ -19,6 +19,7 @@ public abstract class BaseAgentService(
     LlmService llm,
     IAgentToolExecutor executor,
     IAgentMemoryService memory,
+    SharedMemoryService sharedMemory,
     ILogger logger) : IAgentService
 {
     protected abstract string AgentName { get; }
@@ -120,8 +121,9 @@ public abstract class BaseAgentService(
         var sid = sessionId ?? Guid.NewGuid();
 
         await memory.EnsureSessionAsync(sid, ct);
-        var history = await memory.LoadHistoryAsync(sid, ct);
-        var facts   = await memory.LoadFactsAsync(ct);
+        var history       = await memory.LoadHistoryAsync(sid, ct);
+        var facts         = await memory.LoadFactsAsync(ct);
+        var sharedContext = await sharedMemory.LoadSharedContextAsync(ct);
 
         history.Add(new LlmMessage("user", [new TextContent(message)]));
 
@@ -132,11 +134,15 @@ public abstract class BaseAgentService(
         ModelContext? currentModel = null;
         string? escalatedFrom = null;
 
-        // Build system prompt: base + permanent facts + any agent-specific context
+        // Build system prompt: base + permanent facts + shared platform context + agent-specific context
         var systemPrompt = BaseSystemPrompt;
         if (facts.Count > 0)
             systemPrompt += "\n\n## Permanent Memory\n" +
                             string.Join("\n", facts.Select(kv => $"- {kv.Key}: {kv.Value}"));
+
+        if (sharedContext.Count > 0)
+            systemPrompt += "\n\n## Shared Platform Context\n" +
+                            string.Join("\n", sharedContext.Select(kv => $"- {kv.Key}: {kv.Value}"));
 
         var additionalContext = await LoadAdditionalContextAsync(sid, ct);
         if (additionalContext is not null)

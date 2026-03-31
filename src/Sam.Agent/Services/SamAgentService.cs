@@ -13,8 +13,9 @@ public sealed class SamAgentService : BaseAgentService
         LlmService llm,
         SamToolExecutor executor,
         SamMemoryService memory,
+        SharedMemoryService sharedMemory,
         ILogger<SamAgentService> logger)
-        : base(llm, executor, memory, logger) { }
+        : base(llm, executor, memory, sharedMemory, logger) { }
 
     protected override string AgentName => "sam";
     protected override string BaseSystemPrompt => SamSystemPrompt.Prompt;

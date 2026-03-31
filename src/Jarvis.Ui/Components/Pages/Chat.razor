@@ -150,17 +150,6 @@
     private HubConnection? _hub;
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
-    protected override void OnInitialized()
-    {
-        Api.OnSessionExpired += HandleSessionExpiredAsync;
-    }
-
-    private Task HandleSessionExpiredAsync()
-    {
-        Nav.NavigateTo("/login", forceLoad: true);
-        return Task.CompletedTask;
-    }
-
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -572,7 +561,6 @@
     // ── Dispose ────────────────────────────────────────────────────────────
     public async ValueTask DisposeAsync()
     {
-        Api.OnSessionExpired -= HandleSessionExpiredAsync;
         _dotnetRef?.Dispose();
 
         if (_attachMod is not null)

@@ -1,3 +1,4 @@
+using Mediahost.Agents.Data;
 using Mediahost.Agents.Services;
 using Mediahost.Llm.Services;
 using Rex.Agent.Data;
@@ -12,8 +13,9 @@ public sealed class RexAgentService : BaseAgentService
         LlmService llm,
         RexToolExecutor executor,
         RexMemoryService memory,
+        SharedMemoryService sharedMemory,
         ILogger<RexAgentService> logger)
-        : base(llm, executor, memory, logger) { }
+        : base(llm, executor, memory, sharedMemory, logger) { }
 
     protected override string AgentName       => "rex";
     protected override string BaseSystemPrompt => RexSystemPrompt.Prompt;

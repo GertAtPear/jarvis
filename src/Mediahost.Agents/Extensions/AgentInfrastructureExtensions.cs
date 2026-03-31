@@ -57,6 +57,9 @@ public static class AgentInfrastructureExtensions
             ownedPrefixes: vaultOwnedPrefixes,
             sp.GetRequiredService<ILogger<ScopedVaultService>>()));
 
+        // ── Shared platform memory — read by all agents, written only by Eve ────
+        services.AddSingleton<SharedMemoryService>();
+
         // ── Alert dispatch — shared across all agents ─────────────────────────
         services.AddHttpClient();
         services.AddScoped<IAlertDispatchService, AlertDispatchService>();

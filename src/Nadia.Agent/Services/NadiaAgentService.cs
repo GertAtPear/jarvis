@@ -12,8 +12,9 @@ public sealed class NadiaAgentService : BaseAgentService
         LlmService llm,
         IAgentToolExecutor executor,
         IAgentMemoryService memory,
+        SharedMemoryService sharedMemory,
         ILogger<NadiaAgentService> logger)
-        : base(llm, executor, memory, logger) { }
+        : base(llm, executor, memory, sharedMemory, logger) { }
 
     protected override string AgentName => "nadia";
     protected override string BaseSystemPrompt => NadiaSystemPrompt.Prompt;

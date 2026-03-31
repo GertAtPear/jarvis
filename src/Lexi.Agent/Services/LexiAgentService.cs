@@ -1,6 +1,7 @@
 using Lexi.Agent.Data;
 using Lexi.Agent.SystemPrompts;
 using Lexi.Agent.Tools;
+using Mediahost.Agents.Data;
 using Mediahost.Agents.Services;
 using Mediahost.Llm.Services;
 
@@ -10,8 +11,9 @@ public class LexiAgentService(
     LlmService llm,
     LexiToolExecutor executor,
     LexiMemoryService memory,
+    SharedMemoryService sharedMemory,
     ILogger<LexiAgentService> logger)
-    : BaseAgentService(llm, executor, memory, logger)
+    : BaseAgentService(llm, executor, memory, sharedMemory, logger)
 {
     protected override string AgentName => "lexi";
     protected override string BaseSystemPrompt => LexiSystemPrompt.Prompt;

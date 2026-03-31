@@ -1,6 +1,7 @@
 using Eve.Agent.Data;
 using Eve.Agent.SystemPrompts;
 using Eve.Agent.Tools;
+using Mediahost.Agents.Data;
 using Mediahost.Agents.Services;
 using Mediahost.Llm.Services;
 
@@ -14,8 +15,9 @@ public sealed class EveAgentService : BaseAgentService
         LlmService llm,
         EveToolExecutor executor,
         EveMemoryService memory,
+        SharedMemoryService sharedMemory,
         ILogger<EveAgentService> logger)
-        : base(llm, executor, memory, logger)
+        : base(llm, executor, memory, sharedMemory, logger)
     {
         _eveMemory = memory;
     }

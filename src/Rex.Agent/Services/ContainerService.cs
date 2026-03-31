@@ -132,5 +132,83 @@ public class ContainerService : IDisposable
         return (proc.ExitCode == 0, output);
     }
 
+    /// <summary>
+    /// Executes code in an ephemeral sandboxed container. The container is created with
+    /// --rm (auto-removed), no network access, and a 256 MB memory cap.
+    ///
+    /// Code is base64-encoded and injected as the SANDBOX_CODE environment variable;
+    /// each runtime decodes and executes it at startup.
+    /// </summary>
+    public async Task<SandboxResult> SandboxExecAsync(
+        string image,
+        string runtime,
+        string code,
+        Dictionary<string, string>? env,
+        int timeoutSeconds,
+        bool includeWorkspace,
+        string? workspacePath,
+        CancellationToken ct = default)
+    {
+        var encodedCode = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(code));
+        var entrypoint  = BuildEntrypoint(runtime);
+
+        var args = new System.Text.StringBuilder("run --rm --network none --memory 256m --cpus 0.5");
+        args.Append($" --env SANDBOX_CODE={encodedCode}");
+
+        if (env is not null)
+            foreach (var (k, v) in env)
+                args.Append($" --env {k}={v}");
+
+        if (includeWorkspace && !string.IsNullOrWhiteSpace(workspacePath))
+            args.Append($" --volume {workspacePath}:/workspace:ro");
+
+        args.Append($" {image}");
+        args.Append($" {entrypoint}");
+
+        _logger.LogInformation("[sandbox_exec] Running {Runtime} in {Image} (timeout {T}s)", runtime, image, timeoutSeconds);
+
+        var psi = new System.Diagnostics.ProcessStartInfo("podman", args.ToString())
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false
+        };
+
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        using var linked     = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        string stdout, stderr;
+        try
+        {
+            stdout = await proc.StandardOutput.ReadToEndAsync(linked.Token);
+            stderr = await proc.StandardError.ReadToEndAsync(linked.Token);
+            await proc.WaitForExitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            return new SandboxResult(false, "", $"Execution timed out after {timeoutSeconds}s", -1);
+        }
+
+        _logger.LogInformation("[sandbox_exec] Exit code {Code}", proc.ExitCode);
+        return new SandboxResult(proc.ExitCode == 0, stdout.Trim(), stderr.Trim(), proc.ExitCode);
+    }
+
+    private static string BuildEntrypoint(string runtime) => runtime.ToLower() switch
+    {
+        "python" or "python3" =>
+            "python3 -c \"import base64,os; exec(base64.b64decode(os.environ['SANDBOX_CODE']).decode())\"",
+        "node" or "nodejs" =>
+            "node -e \"eval(Buffer.from(process.env.SANDBOX_CODE,'base64').toString())\"",
+        "bash" or "sh" =>
+            "sh -c 'echo \"$SANDBOX_CODE\" | base64 -d | sh'",
+        _ =>
+            $"sh -c 'echo \"$SANDBOX_CODE\" | base64 -d | {runtime}'"
+    };
+
     public void Dispose() => _http.Dispose();
 }
+
+public record SandboxResult(bool Success, string Stdout, string Stderr, int ExitCode);

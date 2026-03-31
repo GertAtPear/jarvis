@@ -83,6 +83,7 @@ public class RexToolExecutor(
                 "container_push"    => await ContainerPushAsync(input, ct),
                 "container_restart" => await ContainerRestartAsync(input, ct),
                 "container_inspect" => await ContainerInspectAsync(input, ct),
+                "sandbox_exec"      => await SandboxExecAsync(input, ct),
 
                 // CI/CD
                 "create_workflow" => await CreateWorkflowAsync(input, ct),
@@ -431,6 +432,43 @@ public class RexToolExecutor(
         var json = await containers.InspectContainerAsync(name, ct);
         return Ok(new { container = name, inspect = json });
     }
+
+    private async Task<string> SandboxExecAsync(JsonDocument input, CancellationToken ct)
+    {
+        var runtime          = RequireString(input, "runtime");
+        var code             = RequireString(input, "code");
+        var timeout          = Math.Min(GetInt(input, "timeout") ?? 30, 300);
+        var includeWorkspace = GetBool(input, "include_workspace") ?? false;
+        var image            = GetString(input, "image") ?? DefaultSandboxImage(runtime);
+
+        var env = new Dictionary<string, string>();
+        if (input.RootElement.TryGetProperty("env", out var envEl) &&
+            envEl.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in envEl.EnumerateObject())
+                env[prop.Name] = prop.Value.GetString() ?? "";
+        }
+
+        var workspacePath = includeWorkspace ? config["Rex:WorkspacePath"] : null;
+        var result = await containers.SandboxExecAsync(image, runtime, code, env, timeout, includeWorkspace, workspacePath, ct);
+
+        return Ok(new
+        {
+            success   = result.Success,
+            exit_code = result.ExitCode,
+            stdout    = result.Stdout,
+            stderr    = result.Stderr,
+            runtime,
+            image
+        });
+    }
+
+    private static string DefaultSandboxImage(string runtime) => runtime.ToLower() switch
+    {
+        "python" or "python3" => "python:3.12-slim",
+        "node"   or "nodejs"  => "node:22-slim",
+        _                     => "alpine:3"
+    };
 
     // ── CI/CD ──────────────────────────────────────────────────────────────────
 

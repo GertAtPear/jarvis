@@ -431,6 +431,26 @@ public static class RexToolDefinitions
             }
             """)),
 
+        new ToolDefinition(
+            "sandbox_exec",
+            "Execute code in an isolated, ephemeral container. The container has no network access, " +
+            "256 MB RAM cap, and is automatically destroyed after execution. " +
+            "Use for: data analysis, CSV processing, quick calculations, testing scripts safely, dry-run transforms. " +
+            "Supported runtimes: python3, bash, node.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "runtime":           { "type": "string", "description": "Runtime to use: python3, bash, node" },
+                "code":              { "type": "string", "description": "Code to execute" },
+                "timeout":           { "type": "number", "description": "Timeout in seconds (default: 30, max: 300)" },
+                "include_workspace": { "type": "boolean", "description": "Mount the shared workspace at /workspace (read-only). Default: false." },
+                "image":             { "type": "string", "description": "Override the container image. Defaults: python3→python:3.12-slim, bash→alpine:3, node→node:22-slim." }
+              },
+              "required": ["runtime", "code"]
+            }
+            """)),
+
         // ── CI/CD ─────────────────────────────────────────────────────────────
 
         new ToolDefinition(

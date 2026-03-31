@@ -3,6 +3,7 @@ using Eve.Agent.Data;
 using Eve.Agent.Data.Repositories;
 using Eve.Agent.Models;
 using Eve.Agent.Services;
+using Mediahost.Agents.Data;
 using Mediahost.Agents.Services;
 using Mediahost.Llm.Models;
 
@@ -14,6 +15,7 @@ public class EveToolExecutor(
     MorningBriefingGeneratorService briefingGenerator,
     GoogleCalendarService calendar,
     EveMemoryService memory,
+    SharedMemoryService sharedMemory,
     ILogger<EveToolExecutor> logger) : IAgentToolExecutor
 {
     public IReadOnlyList<ToolDefinition> GetTools() => EveToolDefinitions.GetTools();
@@ -36,6 +38,8 @@ public class EveToolExecutor(
                 "create_calendar_event" => await CreateCalendarEventAsync(input, ct),
                 "remember_fact"         => await RememberFactAsync(input, ct),
                 "forget_fact"           => await ForgetFactAsync(input, ct),
+                "share_context"         => await ShareContextAsync(input, ct),
+                "unshare_context"       => await UnshareContextAsync(input, ct),
                 "draft_email"           => await DraftEmailAsync(input, ct),
                 "get_location_pin"      => await GetLocationPinAsync(input, ct),
                 _ => Err($"Unknown tool: {toolName}")
@@ -293,6 +297,23 @@ public class EveToolExecutor(
         var key = RequireString(input, "key");
         await memory.ForgetFactAsync(key, ct);
         return Ok(new { forgotten = true, key });
+    }
+
+    // ── Shared platform context ───────────────────────────────────────────────
+
+    private async Task<string> ShareContextAsync(JsonDocument input, CancellationToken ct)
+    {
+        var key   = RequireString(input, "key");
+        var value = RequireString(input, "value");
+        await sharedMemory.WriteContextAsync(key, value, "eve", ct);
+        return Ok(new { shared = true, key, message = $"'{key}' is now visible to all agents." });
+    }
+
+    private async Task<string> UnshareContextAsync(JsonDocument input, CancellationToken ct)
+    {
+        var key = RequireString(input, "key");
+        await sharedMemory.DeleteContextAsync(key, ct);
+        return Ok(new { unshared = true, key });
     }
 
     // ── Email drafting ────────────────────────────────────────────────────────

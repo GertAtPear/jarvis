@@ -246,6 +246,35 @@ public static class EveToolDefinitions
             """)),
 
         new ToolDefinition(
+            "share_context",
+            "Share a fact with ALL agents platform-wide. Use for information that every agent should know automatically — " +
+            "timezone, primary datacenter, working hours, language preference, or any cross-cutting personal context. " +
+            "Distinct from remember_fact (Eve-private) — use this when the fact is relevant beyond Eve.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "key":   { "type": "string", "description": "Short identifier e.g. 'timezone', 'primary_datacenter', 'working_hours'" },
+                "value": { "type": "string", "description": "The value to share with all agents" }
+              },
+              "required": ["key", "value"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "unshare_context",
+            "Remove a previously shared platform-wide fact. Use when a shared context entry is no longer accurate.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "key": { "type": "string", "description": "The shared context key to remove" }
+              },
+              "required": ["key"]
+            }
+            """)),
+
+        new ToolDefinition(
             "create_calendar_event",
             "Create a Google Calendar event for a reminder or task",
             JsonDocument.Parse("""

@@ -3,17 +3,16 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Jarvis.Ui.Auth;
 using Jarvis.Ui.Models;
+using Microsoft.AspNetCore.Components;
 
 namespace Jarvis.Ui.Services;
 
 public class ChatApiService(
     HttpClient http,
     JarvisAuthStateProvider authState,
+    NavigationManager nav,
     ILogger<ChatApiService> logger)
 {
-    /// <summary>Fired when any API call returns 401 (session expired). Subscribers should redirect to /login.</summary>
-    public event Func<Task>? OnSessionExpired;
-
     private async Task SetAuthHeaderAsync()
     {
         var token = await authState.GetTokenAsync();
@@ -22,7 +21,7 @@ public class ChatApiService(
                 new AuthenticationHeaderValue("Bearer", token);
     }
 
-    /// <summary>Returns true if the response was 401, logs out, and fires OnSessionExpired.</summary>
+    /// <summary>Returns true if the response was 401, logs out, and redirects to /login.</summary>
     private async Task<bool> CheckUnauthorizedAsync(HttpResponseMessage response)
     {
         if (response.StatusCode != HttpStatusCode.Unauthorized) return false;
@@ -32,10 +31,9 @@ public class ChatApiService(
 
     private async Task HandleUnauthorizedAsync()
     {
-        logger.LogWarning("Session token expired — logging out");
+        logger.LogWarning("Session token expired — redirecting to login");
         await authState.LogoutAsync();
-        if (OnSessionExpired != null)
-            await OnSessionExpired.Invoke();
+        nav.NavigateTo("/login", forceLoad: true);
     }
 
     public async Task<ChatResponse?> SendMessageAsync(string message, Guid? sessionId)
