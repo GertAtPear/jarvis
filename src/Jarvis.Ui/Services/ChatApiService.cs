@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Jarvis.Ui.Auth;
@@ -10,6 +11,9 @@ public class ChatApiService(
     JarvisAuthStateProvider authState,
     ILogger<ChatApiService> logger)
 {
+    /// <summary>Fired when any API call returns 401 (session expired). Subscribers should redirect to /login.</summary>
+    public event Func<Task>? OnSessionExpired;
+
     private async Task SetAuthHeaderAsync()
     {
         var token = await authState.GetTokenAsync();
@@ -18,12 +22,29 @@ public class ChatApiService(
                 new AuthenticationHeaderValue("Bearer", token);
     }
 
+    /// <summary>Returns true if the response was 401, logs out, and fires OnSessionExpired.</summary>
+    private async Task<bool> CheckUnauthorizedAsync(HttpResponseMessage response)
+    {
+        if (response.StatusCode != HttpStatusCode.Unauthorized) return false;
+        await HandleUnauthorizedAsync();
+        return true;
+    }
+
+    private async Task HandleUnauthorizedAsync()
+    {
+        logger.LogWarning("Session token expired — logging out");
+        await authState.LogoutAsync();
+        if (OnSessionExpired != null)
+            await OnSessionExpired.Invoke();
+    }
+
     public async Task<ChatResponse?> SendMessageAsync(string message, Guid? sessionId)
     {
         try
         {
             await SetAuthHeaderAsync();
             var response = await http.PostAsJsonAsync("/api/chat", new { message, sessionId });
+            if (await CheckUnauthorizedAsync(response)) return null;
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadFromJsonAsync<ChatResponse>();
         }
@@ -54,6 +75,7 @@ public class ChatApiService(
             }
 
             var response = await http.PostAsync("/api/chat/upload", form);
+            if (await CheckUnauthorizedAsync(response)) return null;
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadFromJsonAsync<ChatResponse>();
         }
@@ -71,6 +93,7 @@ public class ChatApiService(
             await SetAuthHeaderAsync();
             var response = await http.PostAsJsonAsync(
                 $"/api/chat/agent/{agentName}", new { message, sessionId });
+            if (await CheckUnauthorizedAsync(response)) return null;
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadFromJsonAsync<ChatResponse>();
         }
@@ -91,6 +114,11 @@ public class ChatApiService(
             // API response has no attachments field — ensure it's never null
             return msgs.Select(m => m with { Attachments = m.Attachments ?? [] }).ToList();
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            _ = HandleUnauthorizedAsync();
+            return [];
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to get history for session {SessionId}", sessionId);
@@ -104,6 +132,11 @@ public class ChatApiService(
         {
             await SetAuthHeaderAsync();
             return await http.GetFromJsonAsync<List<AgentDto>>("/api/agents") ?? [];
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            _ = HandleUnauthorizedAsync();
+            return [];
         }
         catch (Exception ex)
         {
@@ -120,6 +153,11 @@ public class ChatApiService(
             return await http.GetFromJsonAsync<List<SessionSummaryDto>>(
                        "/api/sessions?limit=30") ?? [];
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            _ = HandleUnauthorizedAsync();
+            return [];
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to get recent sessions");
@@ -134,10 +172,67 @@ public class ChatApiService(
             await SetAuthHeaderAsync();
             return await http.GetFromJsonAsync<BriefingResponse>("/api/briefing/today");
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            _ = HandleUnauthorizedAsync();
+            return null;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to get briefing");
             return null;
+        }
+    }
+
+    // ── Agent message bus API ─────────────────────────────────────────────────
+
+    public async Task<List<AgentActivityMessageDto>> GetAgentMessagesAsync(int limit = 100)
+    {
+        try
+        {
+            await SetAuthHeaderAsync();
+            return await http.GetFromJsonAsync<List<AgentActivityMessageDto>>(
+                       $"/api/agent-messages?limit={limit}") ?? [];
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            _ = HandleUnauthorizedAsync();
+            return [];
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to get agent messages");
+            return [];
+        }
+    }
+
+    public async Task<bool> ApproveAgentMessageAsync(long id)
+    {
+        try
+        {
+            await SetAuthHeaderAsync();
+            var resp = await http.PostAsJsonAsync($"/api/agent-messages/{id}/approve", new { });
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to approve agent message {Id}", id);
+            return false;
+        }
+    }
+
+    public async Task<bool> DenyAgentMessageAsync(long id)
+    {
+        try
+        {
+            await SetAuthHeaderAsync();
+            var resp = await http.PostAsJsonAsync($"/api/agent-messages/{id}/deny", new { });
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to deny agent message {Id}", id);
+            return false;
         }
     }
 

@@ -49,4 +49,38 @@ public class WatchedServiceRepository(DbConnectionFactory db)
         return await conn.QueryAsync<WatchedService>(
             $"SELECT {SelectColumns} FROM rocky_schema.watched_services ORDER BY name");
     }
+
+    public async Task<WatchedService> UpsertAsync(
+        string name,
+        string displayName,
+        string checkType,
+        string checkConfigJson,
+        int intervalSeconds,
+        string? vaultSecretPath = null)
+    {
+        await using var conn = db.Create();
+        return await conn.QuerySingleAsync<WatchedService>($"""
+            INSERT INTO rocky_schema.watched_services
+                (name, display_name, check_type, check_config, interval_seconds, enabled, vault_secret_path, updated_at)
+            VALUES
+                (@name, @displayName, @checkType, @checkConfigJson::jsonb, @intervalSeconds, true, @vaultSecretPath, NOW())
+            ON CONFLICT (name) DO UPDATE SET
+                display_name     = EXCLUDED.display_name,
+                check_type       = EXCLUDED.check_type,
+                check_config     = EXCLUDED.check_config,
+                interval_seconds = EXCLUDED.interval_seconds,
+                enabled          = true,
+                vault_secret_path = EXCLUDED.vault_secret_path,
+                updated_at       = NOW()
+            RETURNING {SelectColumns}
+            """, new { name, displayName, checkType, checkConfigJson, intervalSeconds, vaultSecretPath });
+    }
+
+    public async Task<bool> DeleteByNameAsync(string name)
+    {
+        await using var conn = db.Create();
+        var affected = await conn.ExecuteAsync(
+            "DELETE FROM rocky_schema.watched_services WHERE name = @name", new { name });
+        return affected > 0;
+    }
 }

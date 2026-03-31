@@ -61,6 +61,11 @@
                     <button class="new-chat-btn" @onclick="ClearDirectAgent">&#8592; Back to Jarvis</button>
                 }
                 <button class="new-chat-btn" @onclick="NewSessionAsync">+ New chat</button>
+                <button class="new-chat-btn activity-toggle-btn"
+                        @onclick="() => isActivityOpen = !isActivityOpen"
+                        title="Agent Activity">
+                    &#x1F4E1; Activity@(_pendingApprovalCount > 0 ? $" ({_pendingApprovalCount})" : "")
+                </button>
             </div>
         }
 
@@ -110,6 +115,11 @@
         </div>
 
     </div>
+
+    <AgentActivityFeed @ref="_activityFeed"
+                       IsOpen="@isActivityOpen"
+                       OnClose="() => isActivityOpen = false" />
+
 </div>
 
 @code {
@@ -123,6 +133,9 @@
     private Guid?                   sessionId;
     private string?                 directAgent;       // non-null = bypass Jarvis, talk directly to this agent
     private string?                 reconnectStatus;   // null | "reconnecting" | "failed"
+    private bool                    isActivityOpen;
+    private int                     _pendingApprovalCount;
+    private AgentActivityFeed?      _activityFeed;
 
     // ── Session memory across agent switches ───────────────────────────────
     private Guid?                        _savedJarvisSessionId;
@@ -137,6 +150,17 @@
     private HubConnection? _hub;
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
+    protected override void OnInitialized()
+    {
+        Api.OnSessionExpired += HandleSessionExpiredAsync;
+    }
+
+    private Task HandleSessionExpiredAsync()
+    {
+        Nav.NavigateTo("/login", forceLoad: true);
+        return Task.CompletedTask;
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
@@ -394,6 +418,27 @@
             })
             .Build();
 
+        _hub.On<AgentActivityMessageDto>("AgentMessage", msg =>
+        {
+            _activityFeed?.AddMessage(msg);
+            if (msg.RequiresApproval && msg.ApprovalStatus == "pending")
+            {
+                _pendingApprovalCount++;
+                if (!isActivityOpen)
+                    InvokeAsync(StateHasChanged);
+            }
+        });
+
+        _hub.On<AgentActivityMessageDto>("ApprovalNeeded", msg =>
+        {
+            _pendingApprovalCount = Math.Max(0, _pendingApprovalCount);
+            if (!isActivityOpen)
+            {
+                isActivityOpen = true;
+                InvokeAsync(StateHasChanged);
+            }
+        });
+
         _hub.Reconnecting += _ =>
         {
             reconnectStatus = "reconnecting";
@@ -527,6 +572,7 @@
     // ── Dispose ────────────────────────────────────────────────────────────
     public async ValueTask DisposeAsync()
     {
+        Api.OnSessionExpired -= HandleSessionExpiredAsync;
         _dotnetRef?.Dispose();
 
         if (_attachMod is not null)

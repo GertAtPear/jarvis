@@ -163,10 +163,16 @@ public class CheckExecutorService(
         var vaultPath = service.VaultSecretPath ??
                         config.GetProperty("vault_path").GetString()!;
 
+        var dbType = config.TryGetProperty("db_type", out var dbTypeProp)
+            ? dbTypeProp.GetString() ?? "postgres"
+            : "postgres";
+
         SqlCredentials? creds;
         try
         {
-            creds = await CredentialHelper.GetPostgresCredentialsAsync(vault, vaultPath, ct);
+            creds = dbType == "mysql"
+                ? await CredentialHelper.GetMySqlCredentialsAsync(vault, vaultPath, ct)
+                : await CredentialHelper.GetPostgresCredentialsAsync(vault, vaultPath, ct);
         }
         catch (Exception ex)
         {
@@ -182,19 +188,44 @@ public class CheckExecutorService(
         if (!result.Success)
             return (false, result.ErrorMessage);
 
-        var rowCount = result.Value?.Count ?? 0;
+        // New-style threshold: operator + value comparing a single numeric return
+        if (config.TryGetProperty("threshold_operator", out var opProp) &&
+            config.TryGetProperty("threshold_value", out var tvProp))
+        {
+            var op        = opProp.GetString() ?? "lt";
+            var threshold = tvProp.GetDouble();
+            var row       = result.Value?.FirstOrDefault();
+            var rawVal    = row?.Values.FirstOrDefault();
+            var actual    = rawVal is null ? 0.0 : Convert.ToDouble(rawVal);
 
-        // If a threshold is specified, check against it
+            var passed = op switch
+            {
+                "lt"  => actual < threshold,
+                "lte" => actual <= threshold,
+                "gt"  => actual > threshold,
+                "gte" => actual >= threshold,
+                "eq"  => Math.Abs(actual - threshold) < 1e-9,
+                "neq" => Math.Abs(actual - threshold) >= 1e-9,
+                _     => actual < threshold
+            };
+
+            return (passed, passed
+                ? $"Query value {actual} {op} {threshold} ✓"
+                : $"ALERT: query value {actual} violates {op} {threshold}");
+        }
+
+        // Legacy threshold: max_lag_rows (row count comparison)
         if (config.TryGetProperty("max_lag_rows", out var maxLag))
         {
-            var max = maxLag.GetInt32();
+            var rowCount = result.Value?.Count ?? 0;
+            var max      = maxLag.GetInt32();
             return (rowCount <= max,
                 rowCount <= max
                     ? $"Query returned {rowCount} rows (threshold: {max})"
                     : $"Query returned {rowCount} rows — exceeds threshold of {max}");
         }
 
-        return (true, $"Query OK — {rowCount} rows returned");
+        return (true, $"Query OK — {result.Value?.Count ?? 0} rows returned");
     }
 
     private async Task<(bool, string?)> KafkaLagCheckAsync(

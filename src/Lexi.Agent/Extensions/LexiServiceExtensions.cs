@@ -6,6 +6,7 @@ using Lexi.Agent.Tools;
 using Mediahost.Agents.Data;
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
 using Quartz;
 
 namespace Lexi.Agent.Extensions;
@@ -38,6 +39,9 @@ public static class LexiServiceExtensions
         services.AddScoped<CertCheckService>();
         services.AddScoped<AccessLogAnalyserService>();
         services.AddScoped<NetworkScanService>();
+
+        // ── Shared tool modules ───────────────────────────────────────────────────
+        services.AddScoped<IToolModule, AgentMessagingModule>();
 
         // ── Tool executor & agent ─────────────────────────────────────────────────
         services.AddScoped<LexiToolExecutor>();

@@ -109,6 +109,22 @@ public record RegisterDeviceResponseDto(
     string  RegistrationToken,
     DateTimeOffset TokenExpiresAt);
 
+// ── Agent activity feed ───────────────────────────────────────────────────────
+
+public record AgentActivityMessageDto(
+    long             Id,
+    string           FromAgent,
+    string?          ToAgent,
+    string           Message,
+    long?            ThreadId,
+    bool             RequiresApproval,
+    DateTimeOffset?  ApprovedAt,
+    DateTimeOffset?  DeniedAt,
+    DateTimeOffset?  ReadAt,
+    DateTimeOffset   CreatedAt,
+    string           ApprovalStatus
+);
+
 /// <summary>File data passed from JavaScript paste/drop handlers.</summary>
 public class FilePayload
 {

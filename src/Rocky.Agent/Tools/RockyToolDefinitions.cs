@@ -117,11 +117,61 @@ public static class RockyToolDefinitions
             }
             """)),
 
+        // ── Custom Query Checks ───────────────────────────────────────────────
+
+        new ToolDefinition(
+            "register_query_check",
+            "Register a scheduled SQL query check. Rocky will run the query on the given schedule " +
+            "and alert if the result doesn't meet the threshold. " +
+            "Supported threshold operators: lt (less than), lte, gt, gte, eq, neq. " +
+            "Supply vault_path pointing to either PostgreSQL (pg_*) or MySQL (mysql_*) credentials. " +
+            "For MySQL vault paths, set db_type='mysql'.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "name":              { "type": "string",  "description": "Unique check name (e.g. 'prod.pending-orders')" },
+                "description":       { "type": "string",  "description": "What this check monitors" },
+                "query":             { "type": "string",  "description": "SELECT query to run — must return a single numeric value in the first column of the first row" },
+                "vault_path":        { "type": "string",  "description": "Vault path containing database credentials" },
+                "db_type":           { "type": "string",  "description": "Database type: postgres (default) | mysql" },
+                "interval_minutes":  { "type": "integer", "description": "Run every N minutes (mutually exclusive with cron)" },
+                "cron":              { "type": "string",  "description": "Quartz cron expression e.g. '0 0 6 * * ?' for 06:00 UTC daily (mutually exclusive with interval_minutes)" },
+                "threshold_operator":{ "type": "string",  "description": "Comparison operator: lt | lte | gt | gte | eq | neq" },
+                "threshold_value":   { "type": "number",  "description": "Expected threshold value" }
+              },
+              "required": ["name", "query", "vault_path", "threshold_operator", "threshold_value"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "list_query_checks",
+            "List all registered SQL query checks and their most recent results.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {}
+            }
+            """)),
+
+        new ToolDefinition(
+            "delete_query_check",
+            "Remove a registered SQL query check by name.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Check name to remove" }
+              },
+              "required": ["name"]
+            }
+            """)),
+
         // ── Alert Channels ────────────────────────────────────────────────────
 
         new ToolDefinition(
             "list_alert_channels",
-            "List all configured alert channels (Slack, email) for alert dispatch.",
+            "List all configured alert channels (Slack, email, agent) for alert dispatch.",
             JsonDocument.Parse("""
             {
               "type": "object",
@@ -144,6 +194,25 @@ public static class RockyToolDefinitions
                 "alert_type_filter": { "type": "string", "description": "Comma-separated alert types to filter (empty = all types)" }
               },
               "required": ["channel_name", "channel_type", "config_json"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "configure_agent_alert_channel",
+            "Configure an alert channel that posts alerts directly to another agent via the message bus. " +
+            "When a check fails, Rocky will post a message to the target agent (e.g. 'rex') so it can take action. " +
+            "This is used for Rocky → Rex escalation workflows.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "channel_name":      { "type": "string", "description": "Unique name for this channel (e.g. 'rex-escalation')" },
+                "target_agent":      { "type": "string", "description": "Agent name to post alerts to (e.g. 'rex', 'jarvis')" },
+                "min_severity":      { "type": "string", "description": "Minimum severity to dispatch: low | medium | high | critical (default: high)" },
+                "agent_filter":      { "type": "string", "description": "Comma-separated service/agent names to filter (empty = all)" },
+                "alert_type_filter": { "type": "string", "description": "Comma-separated alert types to filter (empty = all types)" }
+              },
+              "required": ["channel_name", "target_agent"]
             }
             """))
     ];

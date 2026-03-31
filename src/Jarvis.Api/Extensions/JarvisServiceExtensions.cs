@@ -52,6 +52,10 @@ public static class JarvisServiceExtensions
         services.AddScoped<UsageAnalyticsService>();
         services.AddScoped<RoutingRulesService>();
 
+        // ── Agent message bus ────────────────────────────────────────────────
+        services.AddScoped<AgentMessageRepository>();
+        services.AddHostedService<AgentMessagePollingService>();
+
         // ── Device management (Local Agent Host) ─────────────────────────────
         services.AddScoped<DeviceRepository>();
         services.AddSingleton<DeviceConnectionTracker>();

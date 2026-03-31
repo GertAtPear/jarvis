@@ -30,5 +30,6 @@ app.UseHttpsRedirection();
 app.UseJarvisAuth();
 app.MapControllers();
 app.MapHub<DeviceHub>("/hubs/device");
+app.MapHub<AgentActivityHub>("/hubs/chat");
 
 app.Run();

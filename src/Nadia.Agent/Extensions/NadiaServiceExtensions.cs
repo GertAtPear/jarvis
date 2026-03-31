@@ -1,6 +1,7 @@
 using Mediahost.Agents.Data;
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
 using Nadia.Agent.Data;
 using Nadia.Agent.Data.Repositories;
 using Nadia.Agent.Jobs;
@@ -29,6 +30,8 @@ public static class NadiaServiceExtensions
         services.AddScoped<LatencyProbeService>();
         services.AddScoped<DnsHealthService>();
         services.AddSingleton<FailoverDetectionService>();
+
+        services.AddScoped<IToolModule, AgentMessagingModule>();
 
         services.AddScoped<IAgentToolExecutor, NadiaToolExecutor>();
         services.AddScoped<NadiaAgentService>();

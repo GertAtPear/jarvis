@@ -12,6 +12,7 @@ volumes:
   nginx_certs:
   certbot_webroot:
   jarvis_ui_dp_keys:
+  agent_workspace:
 
 services:
 
@@ -199,11 +200,13 @@ services:
       Browser__MaxConcurrentSessions: 3
       Browser__DefaultTimeoutSeconds: 30
       Browser__Headless: true
+      Workspace__Path: /workspace
     networks:
       - mediahost-ai
     volumes:
       - ./logs/browser:/app/logs
       - ./browser-screenshots:/app/screenshots
+      - agent_workspace:/workspace
     shm_size: '2gb'
     cap_add:
       - SYS_ADMIN
@@ -233,12 +236,14 @@ services:
       Rex__ScaffoldingRoot: /scaffolding
       Rex__GitUserName: Rex Agent
       Rex__GitUserEmail: rex@mediahost.ai
+      Workspace__Path: /agent-workspace
     volumes:
       - ./logs/rex:/app/logs
       - /home/gert/Documents/Projects/Pear:/workspace
       - .:/project
       - /run/user/1000/podman/podman.sock:/run/podman/podman.sock:z
       - ./scaffolding:/scaffolding:ro
+      - agent_workspace:/agent-workspace
     networks:
       - mediahost-ai
 
@@ -292,6 +297,7 @@ services:
       Andrew__Ssh__TimeoutSeconds: 10
       Andrew__Ssh__MaxParallelConnections: 5
       Jarvis__BaseUrl: http://localhost:5010
+      Workspace__Path: /workspace
     network_mode: host
     # Andrew uses host networking so it can reach your LAN/VPN servers directly.
     # NOTE: On host network, other services reach Andrew at localhost:5001
@@ -300,6 +306,7 @@ services:
     volumes:
       - ./logs/andrew:/app/logs
       - ./ssh-keys:/app/ssh-keys:ro
+      - agent_workspace:/workspace
 
   sam-agent:
     build:

@@ -86,5 +86,51 @@ public class ContainerService : IDisposable
         return await resp.Content.ReadAsStringAsync(ct);
     }
 
+    public async Task<(bool Ok, string Output)> LoginRegistryAsync(
+        string registry, string username, string password, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Logging in to registry {Registry} as {User}", registry, username);
+
+        var psi = new System.Diagnostics.ProcessStartInfo(
+            "podman", $"login {registry} -u {username} --password-stdin")
+        {
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false
+        };
+
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        await proc.StandardInput.WriteAsync(password);
+        proc.StandardInput.Close();
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+
+        var output = (stdout + stderr).Trim();
+        return (proc.ExitCode == 0, output);
+    }
+
+    public async Task<(bool Ok, string Output)> PushImageAsync(string tag, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Pushing image {Tag}", tag);
+
+        var psi = new System.Diagnostics.ProcessStartInfo(
+            "podman", $"push {tag}")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false
+        };
+
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+
+        var output = (stdout + stderr).Trim();
+        return (proc.ExitCode == 0, output);
+    }
+
     public void Dispose() => _http.Dispose();
 }

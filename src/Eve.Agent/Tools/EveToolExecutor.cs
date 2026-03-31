@@ -26,15 +26,18 @@ public class EveToolExecutor(
         {
             return toolName switch
             {
-                "add_reminder"        => await AddReminderAsync(input, ct),
-                "list_reminders"      => await ListRemindersAsync(input, ct),
-                "complete_reminder"   => await CompleteReminderAsync(input, ct),
-                "snooze_reminder"     => await SnoozeReminderAsync(input, ct),
-                "add_contact"         => await AddContactAsync(input, ct),
-                "get_briefing"        => await GetBriefingAsync(ct),
+                "add_reminder"          => await AddReminderAsync(input, ct),
+                "list_reminders"        => await ListRemindersAsync(input, ct),
+                "complete_reminder"     => await CompleteReminderAsync(input, ct),
+                "snooze_reminder"       => await SnoozeReminderAsync(input, ct),
+                "add_contact"           => await AddContactAsync(input, ct),
+                "get_contact"           => await GetContactAsync(input, ct),
+                "get_briefing"          => await GetBriefingAsync(ct),
                 "create_calendar_event" => await CreateCalendarEventAsync(input, ct),
                 "remember_fact"         => await RememberFactAsync(input, ct),
                 "forget_fact"           => await ForgetFactAsync(input, ct),
+                "draft_email"           => await DraftEmailAsync(input, ct),
+                "get_location_pin"      => await GetLocationPinAsync(input, ct),
                 _ => Err($"Unknown tool: {toolName}")
             };
         }
@@ -45,7 +48,7 @@ public class EveToolExecutor(
         }
     }
 
-    // ── Tool implementations ──────────────────────────────────────────────────
+    // ── Reminders ─────────────────────────────────────────────────────────────
 
     private async Task<string> AddReminderAsync(JsonDocument input, CancellationToken ct)
     {
@@ -139,18 +142,37 @@ public class EveToolExecutor(
         return Ok(new { id, snoozed_until = until.ToString("yyyy-MM-dd"), message = "Reminder snoozed." });
     }
 
+    // ── Contacts ──────────────────────────────────────────────────────────────
+
     private async Task<string> AddContactAsync(JsonDocument input, CancellationToken ct)
     {
         var name         = RequireString(input, "name");
         var relationship = GetString(input, "relationship");
+        var contactType  = GetString(input, "contact_type") ?? "person";
+        var company      = GetString(input, "company");
+        var phoneCell    = GetString(input, "phone_cell");
+        var phoneWork    = GetString(input, "phone_work");
+        var phoneHome    = GetString(input, "phone_home");
+        var emailPersonal = GetString(input, "email_personal");
+        var emailWork    = GetString(input, "email_work");
+        var addressHome  = GetString(input, "address_home");
+        var addressWork  = GetString(input, "address_work");
+        var website      = GetString(input, "website");
         var notes        = GetString(input, "notes");
+
+        // Build social_links JSONB from individual URL params
+        var socialLinks = new Dictionary<string, string?>();
+        if (GetString(input, "facebook_url") is { } fb)  socialLinks["facebook"]  = fb;
+        if (GetString(input, "linkedin_url") is { } li)  socialLinks["linkedin"]  = li;
+        var socialLinksJson = socialLinks.Count > 0
+            ? JsonSerializer.Serialize(socialLinks)
+            : null;
 
         DateOnly? birthday    = null;
         DateOnly? anniversary = null;
 
         if (GetString(input, "birthday") is { } bStr)
         {
-            // MM-DD → use a fixed year for storage
             var parts = bStr.Split('-');
             birthday = new DateOnly(2000, int.Parse(parts[0]), int.Parse(parts[1]));
         }
@@ -163,17 +185,68 @@ public class EveToolExecutor(
 
         var contact = new Contact
         {
-            Id           = Guid.NewGuid(),
-            Name         = name,
-            Relationship = relationship,
-            Birthday     = birthday,
-            Anniversary  = anniversary,
-            Notes        = notes
+            Id            = Guid.NewGuid(),
+            Name          = name,
+            Relationship  = relationship,
+            ContactType   = contactType,
+            Company       = company,
+            PhoneCell     = phoneCell,
+            PhoneWork     = phoneWork,
+            PhoneHome     = phoneHome,
+            EmailPersonal = emailPersonal,
+            EmailWork     = emailWork,
+            AddressHome   = addressHome,
+            AddressWork   = addressWork,
+            Website       = website,
+            SocialLinksJson = socialLinksJson,
+            Birthday      = birthday,
+            Anniversary   = anniversary,
+            Notes         = notes
         };
 
         await contacts.UpsertAsync(contact);
         return Ok(new { name, message = "Contact saved." });
     }
+
+    private async Task<string> GetContactAsync(JsonDocument input, CancellationToken ct)
+    {
+        var name    = RequireString(input, "name");
+        var contact = await contacts.SearchByNameAsync(name);
+
+        if (contact is null)
+            return Ok(new { found = false, name, message = $"No contact found matching '{name}'." });
+
+        // Parse social links for cleaner output
+        object? socialLinks = null;
+        if (contact.SocialLinksJson is { } sl && sl != "{}")
+        {
+            try { socialLinks = JsonDocument.Parse(sl).RootElement; } catch { /* ignore */ }
+        }
+
+        return Ok(new
+        {
+            found         = true,
+            id            = contact.Id,
+            name          = contact.Name,
+            relationship  = contact.Relationship,
+            contact_type  = contact.ContactType,
+            company       = contact.Company,
+            phone_cell    = contact.PhoneCell,
+            phone_work    = contact.PhoneWork,
+            phone_home    = contact.PhoneHome,
+            email_personal = contact.EmailPersonal,
+            email_work    = contact.EmailWork,
+            address_home  = contact.AddressHome,
+            address_work  = contact.AddressWork,
+            website       = contact.Website,
+            social_links  = socialLinks,
+            birthday      = contact.Birthday?.ToString("MM-dd"),
+            anniversary   = contact.Anniversary?.ToString("MM-dd"),
+            notes         = contact.Notes
+        });
+    }
+
+    // ── Briefing ──────────────────────────────────────────────────────────────
 
     private async Task<string> GetBriefingAsync(CancellationToken ct)
     {
@@ -181,6 +254,8 @@ public class EveToolExecutor(
         var briefing = await briefingGenerator.GenerateBriefingAsync(today);
         return Ok(new { briefing });
     }
+
+    // ── Calendar ──────────────────────────────────────────────────────────────
 
     private async Task<string> CreateCalendarEventAsync(JsonDocument input, CancellationToken ct)
     {
@@ -191,7 +266,6 @@ public class EveToolExecutor(
 
         var eventId = await calendar.CreateEventAsync(title, date, time, description, ct);
 
-        // Link to reminder if reminder_id provided
         if (GetString(input, "reminder_id") is { } ridStr && Guid.TryParse(ridStr, out var rid))
             await reminders.SetCalendarEventIdAsync(rid, eventId);
 
@@ -201,6 +275,169 @@ public class EveToolExecutor(
             title,
             date,
             message = "Calendar event created."
+        });
+    }
+
+    // ── Permanent memory ──────────────────────────────────────────────────────
+
+    private async Task<string> RememberFactAsync(JsonDocument input, CancellationToken ct)
+    {
+        var key   = RequireString(input, "key");
+        var value = RequireString(input, "value");
+        await memory.RememberFactAsync(key, value, ct);
+        return Ok(new { remembered = true, key, message = $"I'll remember: {key} = {value}" });
+    }
+
+    private async Task<string> ForgetFactAsync(JsonDocument input, CancellationToken ct)
+    {
+        var key = RequireString(input, "key");
+        await memory.ForgetFactAsync(key, ct);
+        return Ok(new { forgotten = true, key });
+    }
+
+    // ── Email drafting ────────────────────────────────────────────────────────
+
+    private async Task<string> DraftEmailAsync(JsonDocument input, CancellationToken ct)
+    {
+        var to      = RequireString(input, "to");
+        var subject = RequireString(input, "subject");
+        var body    = RequireString(input, "body");
+        var clientOverride = GetString(input, "mail_client");
+
+        List<string> attachmentPaths = [];
+        if (input.RootElement.TryGetProperty("attachment_paths", out var apEl)
+            && apEl.ValueKind == JsonValueKind.Array)
+        {
+            attachmentPaths = apEl.EnumerateArray()
+                .Select(e => e.GetString() ?? "")
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .ToList();
+        }
+
+        string  resolvedEmail = to;
+        string? contactName   = null;
+        string? relationship  = null;
+
+        if (!to.Contains('@'))
+        {
+            var contact = await contacts.SearchByNameAsync(to);
+            if (contact is null)
+            {
+                return Ok(new
+                {
+                    resolved         = false,
+                    to,
+                    message          = $"No contact found for '{to}'. Please provide an email address or add the contact first.",
+                    subject,
+                    body,
+                    attachment_paths = attachmentPaths
+                });
+            }
+
+            contactName  = contact.Name;
+            relationship = contact.Relationship?.ToLower();
+
+            // Choose email: infer from client override or relationship
+            var isPersonal = IsPersonalRelationship(relationship, clientOverride);
+            var email = isPersonal
+                ? (contact.EmailPersonal ?? contact.EmailWork)
+                : (contact.EmailWork     ?? contact.EmailPersonal);
+
+            if (email is null)
+            {
+                return Ok(new
+                {
+                    resolved         = false,
+                    to               = contact.Name,
+                    message          = $"No email address stored for {contact.Name}. Ask Gert for the address or add it to the contact.",
+                    subject,
+                    body,
+                    attachment_paths = attachmentPaths
+                });
+            }
+
+            resolvedEmail = email;
+        }
+
+        var mailClient  = ResolveMailClient(relationship, clientOverride);
+        var composeUrl  = BuildComposeUrl(resolvedEmail, subject, body, mailClient);
+        var attachNote  = attachmentPaths.Count > 0
+            ? $"Open the email, then manually attach: {string.Join(", ", attachmentPaths)}"
+            : "Draft ready — open the link to review and send.";
+
+        return Ok(new
+        {
+            resolved          = true,
+            to                = resolvedEmail,
+            contact_name      = contactName,
+            subject,
+            body,
+            mail_client_used  = mailClient,
+            compose_url       = composeUrl,
+            attachment_paths  = attachmentPaths,
+            message           = attachNote
+        });
+    }
+
+    private static bool IsPersonalRelationship(string? relationship, string? clientOverride)
+    {
+        if (clientOverride == "gmail")   return true;
+        if (clientOverride == "outlook") return false;
+        if (relationship is null) return false;
+        return relationship is "girlfriend" or "boyfriend" or "wife" or "husband"
+            or "sister" or "brother" or "mother" or "father" or "parent"
+            or "son" or "daughter" or "family" or "friend" or "personal";
+    }
+
+    private static string ResolveMailClient(string? relationship, string? clientOverride)
+    {
+        if (clientOverride is "gmail" or "outlook") return clientOverride;
+        return IsPersonalRelationship(relationship, null) ? "gmail" : "outlook";
+    }
+
+    private static string BuildComposeUrl(string email, string subject, string body, string mailClient)
+    {
+        var es = Uri.EscapeDataString(subject);
+        var eb = Uri.EscapeDataString(body);
+        return mailClient == "gmail"
+            ? $"https://mail.google.com/mail/?view=cm&to={Uri.EscapeDataString(email)}&su={es}&body={eb}"
+            : $"https://outlook.office.com/mail/deeplink/compose?to={Uri.EscapeDataString(email)}&subject={es}&body={eb}";
+    }
+
+    // ── Location pin ──────────────────────────────────────────────────────────
+
+    private async Task<string> GetLocationPinAsync(JsonDocument input, CancellationToken ct)
+    {
+        var name        = RequireString(input, "name");
+        var addressType = GetString(input, "address_type") ?? "home";
+
+        var contact = await contacts.SearchByNameAsync(name);
+        if (contact is null)
+            return Ok(new { found = false, name, message = $"No contact found matching '{name}'." });
+
+        var address = addressType == "work" ? contact.AddressWork : contact.AddressHome;
+
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return Ok(new
+            {
+                found        = false,
+                name         = contact.Name,
+                address_type = addressType,
+                message      = $"No {addressType} address stored for {contact.Name}. " +
+                               "You could try searching for it using web_search."
+            });
+        }
+
+        var mapsUrl = $"https://www.google.com/maps/search/?api=1&query={Uri.EscapeDataString(address)}";
+        return Ok(new
+        {
+            found        = true,
+            name         = contact.Name,
+            address_type = addressType,
+            address,
+            maps_url     = mapsUrl,
+            message      = $"Got the {addressType} address for {contact.Name}. Call laptop_open_url with maps_url to open the map."
         });
     }
 
@@ -220,23 +457,6 @@ public class EveToolExecutor(
         doc.RootElement.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.Number
             ? p.GetInt32()
             : null;
-
-    // ── Permanent memory ──────────────────────────────────────────────────────
-
-    private async Task<string> RememberFactAsync(JsonDocument input, CancellationToken ct)
-    {
-        var key   = RequireString(input, "key");
-        var value = RequireString(input, "value");
-        await memory.RememberFactAsync(key, value, ct);
-        return Ok(new { remembered = true, key, message = $"I'll remember: {key} = {value}" });
-    }
-
-    private async Task<string> ForgetFactAsync(JsonDocument input, CancellationToken ct)
-    {
-        var key = RequireString(input, "key");
-        await memory.ForgetFactAsync(key, ct);
-        return Ok(new { forgotten = true, key });
-    }
 
     private static string Ok(object value)  => JsonSerializer.Serialize(value, JsonOpts);
     private static string Err(string msg)   => JsonSerializer.Serialize(new { error = msg }, JsonOpts);

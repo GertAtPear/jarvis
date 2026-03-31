@@ -1,6 +1,7 @@
 using Mediahost.Agents.Data;
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
 using Quartz;
 using Sam.Agent.Data;
 using Sam.Agent.Data.Repositories;
@@ -34,6 +35,9 @@ public static class SamServiceExtensions
         // ── Scan services ─────────────────────────────────────────────────────────
         services.AddScoped<MySqlScanService>();
         services.AddScoped<PostgreSqlScanService>();
+
+        // ── Shared tool modules ───────────────────────────────────────────────────
+        services.AddScoped<IToolModule, AgentMessagingModule>();
 
         // ── Tool executor and agent service ───────────────────────────────────────
         services.AddScoped<SamToolExecutor>();

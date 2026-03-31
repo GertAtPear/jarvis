@@ -1,5 +1,6 @@
 using Mediahost.Agents.Extensions;
 using Mediahost.Agents.Services;
+using Mediahost.Agents.Tools;
 using Rocky.Agent.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -32,6 +33,9 @@ public static class RockyServiceExtensions
 
         // ── Check executor ────────────────────────────────────────────────────
         services.AddScoped<CheckExecutorService>();
+
+        // ── Shared tool modules ───────────────────────────────────────────────
+        services.AddScoped<IToolModule, AgentMessagingModule>();
 
         // ── Tool executor + agent service ─────────────────────────────────────
         services.AddScoped<RockyToolExecutor>();

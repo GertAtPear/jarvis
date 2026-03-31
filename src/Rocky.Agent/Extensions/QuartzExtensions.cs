@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Quartz;
@@ -82,23 +83,49 @@ public class RockyJobScheduler(ISchedulerFactory schedulerFactory, ILogger<Rocky
             .StoreDurably()
             .Build();
 
-        var trigger = TriggerBuilder.Create()
-            .WithIdentity(trigKey)
-            .ForJob(jobKey)
-            .StartAt(DateTimeOffset.UtcNow.AddSeconds(5))
-            .WithSimpleSchedule(s => s
-                .WithIntervalInSeconds(service.IntervalSeconds)
-                .RepeatForever()
-                .WithMisfireHandlingInstructionFireNow())
-            .Build();
+        // Check for a cron expression in check_config (stored by register_query_check)
+        string? cronExpr = null;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(service.CheckConfig))
+            {
+                var cfg = JsonDocument.Parse(service.CheckConfig);
+                if (cfg.RootElement.TryGetProperty("cron", out var cron))
+                    cronExpr = cron.GetString();
+            }
+        }
+        catch { /* ignore parse errors */ }
+
+        ITrigger trigger;
+        if (!string.IsNullOrWhiteSpace(cronExpr))
+        {
+            trigger = TriggerBuilder.Create()
+                .WithIdentity(trigKey)
+                .ForJob(jobKey)
+                .WithCronSchedule(cronExpr, c => c.InTimeZone(TimeZoneInfo.Utc))
+                .Build();
+            logger.LogDebug("[Rocky] Scheduled job for service '{Name}' with cron '{Cron}'",
+                service.Name, cronExpr);
+        }
+        else
+        {
+            trigger = TriggerBuilder.Create()
+                .WithIdentity(trigKey)
+                .ForJob(jobKey)
+                .StartAt(DateTimeOffset.UtcNow.AddSeconds(5))
+                .WithSimpleSchedule(s => s
+                    .WithIntervalInSeconds(service.IntervalSeconds)
+                    .RepeatForever()
+                    .WithMisfireHandlingInstructionFireNow())
+                .Build();
+            logger.LogDebug("[Rocky] Scheduled job for service '{Name}' every {Seconds}s",
+                service.Name, service.IntervalSeconds);
+        }
 
         if (await scheduler.CheckExists(jobKey, ct))
             await scheduler.AddJob(job, replace: true, ct);
         else
             await scheduler.ScheduleJob(job, trigger, ct);
-
-        logger.LogDebug("[Rocky] Scheduled job for service '{Name}' every {Seconds}s",
-            service.Name, service.IntervalSeconds);
     }
 
     public async Task UnscheduleServiceAsync(Guid serviceId, CancellationToken ct = default)

@@ -23,6 +23,7 @@ public class RockyToolExecutor(
     DockerCapability docker,
     DbConnectionFactory db,
     IConnectionMultiplexer redis,
+    IRockyJobScheduler scheduler,
     ILogger<RockyToolExecutor> logger)
 {
     private static readonly JsonSerializerOptions Opts =
@@ -45,8 +46,12 @@ public class RockyToolExecutor(
                 "run_tcp_check"         => await RunTcpCheckAsync(parameters, ct),
                 "run_container_check"   => await RunContainerCheckAsync(parameters, ct),
                 "run_ssh_process_check" => await RunSshProcessCheckAsync(parameters, ct),
-                "list_alert_channels"   => await ListAlertChannelsAsync(ct),
-                "configure_alert_channel" => await ConfigureAlertChannelAsync(parameters, ct),
+                "register_query_check"  => await RegisterQueryCheckAsync(parameters, ct),
+                "list_query_checks"     => await ListQueryChecksAsync(ct),
+                "delete_query_check"    => await DeleteQueryCheckAsync(parameters, ct),
+                "list_alert_channels"           => await ListAlertChannelsAsync(ct),
+                "configure_alert_channel"       => await ConfigureAlertChannelAsync(parameters, ct),
+                "configure_agent_alert_channel" => await ConfigureAgentAlertChannelAsync(parameters, ct),
                 _ => Err($"Unknown tool: {toolName}")
             };
         }
@@ -272,6 +277,117 @@ public class RockyToolExecutor(
         });
     }
 
+    // ── Custom Query Checks ───────────────────────────────────────────────────
+
+    private async Task<string> RegisterQueryCheckAsync(
+        IReadOnlyDictionary<string, JsonElement> p, CancellationToken ct)
+    {
+        var name               = Str(p, "name");
+        var query              = Str(p, "query");
+        var vaultPath          = Str(p, "vault_path");
+        var thresholdOperator  = Str(p, "threshold_operator");
+        var thresholdValue     = p["threshold_value"].GetDouble();
+
+        var description = p.TryGetValue("description", out var d) ? d.GetString() : null;
+        var dbType      = p.TryGetValue("db_type", out var dt) ? dt.GetString() ?? "postgres" : "postgres";
+
+        if (!new[] { "lt", "lte", "gt", "gte", "eq", "neq" }.Contains(thresholdOperator))
+            return Err($"Invalid threshold_operator '{thresholdOperator}'. Must be: lt, lte, gt, gte, eq, neq.");
+
+        // Build check_config
+        var configDict = new Dictionary<string, object>
+        {
+            ["query"]              = query,
+            ["vault_path"]         = vaultPath,
+            ["db_type"]            = dbType,
+            ["threshold_operator"] = thresholdOperator,
+            ["threshold_value"]    = thresholdValue,
+        };
+
+        // Schedule: cron or interval_minutes
+        int intervalSeconds;
+        if (p.TryGetValue("cron", out var cronEl))
+        {
+            var cron = cronEl.GetString() ?? "";
+            configDict["cron"] = cron;
+            intervalSeconds    = -1; // sentinel — Quartz will use cron trigger
+        }
+        else if (p.TryGetValue("interval_minutes", out var imEl))
+        {
+            intervalSeconds = imEl.GetInt32() * 60;
+        }
+        else
+        {
+            intervalSeconds = 3600; // default: hourly
+        }
+
+        var configJson = JsonSerializer.Serialize(configDict);
+        var displayName = description ?? name;
+
+        var service = await serviceRepo.UpsertAsync(
+            name, displayName, "sql_select", configJson, intervalSeconds, vaultPath);
+
+        await scheduler.RefreshJobScheduleAsync(service, ct);
+
+        logger.LogInformation("[Rocky] Registered query check '{Name}' (db_type={Db})", name, dbType);
+
+        var scheduleDesc = configDict.ContainsKey("cron")
+            ? $"cron: {configDict["cron"]}"
+            : $"every {intervalSeconds / 60} minute(s)";
+
+        return Ok(new
+        {
+            name,
+            db_type            = dbType,
+            threshold          = $"{thresholdOperator} {thresholdValue}",
+            schedule           = scheduleDesc,
+            message            = $"Query check '{name}' registered. {scheduleDesc}."
+        });
+    }
+
+    private async Task<string> ListQueryChecksAsync(CancellationToken ct)
+    {
+        var all = await serviceRepo.GetAllAsync();
+        var queryChecks = all.Where(s => s.CheckType == "sql_select").ToList();
+        var results     = new List<object>();
+
+        foreach (var svc in queryChecks)
+        {
+            var latest = await checkRepo.GetLatestAsync(svc.Id);
+            results.Add(new
+            {
+                name            = svc.Name,
+                description     = svc.DisplayName,
+                is_healthy      = latest?.IsHealthy,
+                last_result     = latest?.Detail,
+                last_checked_at = latest?.CheckedAt,
+                enabled         = svc.Enabled
+            });
+        }
+
+        return Ok(new { count = results.Count, query_checks = results });
+    }
+
+    private async Task<string> DeleteQueryCheckAsync(
+        IReadOnlyDictionary<string, JsonElement> p, CancellationToken ct)
+    {
+        var name    = Str(p, "name");
+        var service = await serviceRepo.GetByNameAsync(name);
+
+        if (service is null)
+            return Err($"No query check found with name '{name}'.");
+
+        if (service.CheckType != "sql_select")
+            return Err($"Service '{name}' is not a query check (check_type: {service.CheckType}).");
+
+        await scheduler.UnscheduleServiceAsync(service.Id, ct);
+        var deleted = await serviceRepo.DeleteByNameAsync(name);
+
+        return deleted
+            ? Ok(new { name, message = $"Query check '{name}' deleted and unscheduled." })
+            : Err($"Failed to delete query check '{name}'.");
+    }
+
     // ── Alert Channels ────────────────────────────────────────────────────────
 
     private async Task<string> ListAlertChannelsAsync(CancellationToken ct)
@@ -297,8 +413,8 @@ public class RockyToolExecutor(
         var agentFilter     = p.TryGetValue("agent_filter", out var af) ? af.GetString() : null;
         var alertTypeFilter = p.TryGetValue("alert_type_filter", out var atf) ? atf.GetString() : null;
 
-        if (channelType != "slack" && channelType != "email")
-            return Err($"Invalid channel_type '{channelType}'. Must be 'slack' or 'email'.");
+        if (channelType != "slack" && channelType != "email" && channelType != "agent")
+            return Err($"Invalid channel_type '{channelType}'. Must be 'slack', 'email', or 'agent'.");
 
         // Validate config JSON
         try { JsonDocument.Parse(configJson); }
@@ -346,6 +462,60 @@ public class RockyToolExecutor(
             min_severity  = minSeverity,
             active        = true,
             message       = $"Alert channel '{channelName}' saved. Cache invalidated.",
+        });
+    }
+
+    private async Task<string> ConfigureAgentAlertChannelAsync(
+        IReadOnlyDictionary<string, JsonElement> p, CancellationToken ct)
+    {
+        var channelName     = Str(p, "channel_name");
+        var targetAgent     = Str(p, "target_agent");
+        var minSeverity     = p.TryGetValue("min_severity", out var ms) ? ms.GetString() : "high";
+        var agentFilter     = p.TryGetValue("agent_filter", out var af) ? af.GetString() : null;
+        var alertTypeFilter = p.TryGetValue("alert_type_filter", out var atf) ? atf.GetString() : null;
+
+        var configJson = JsonSerializer.Serialize(new { agent = targetAgent });
+
+        var agentArr     = string.IsNullOrWhiteSpace(agentFilter)
+            ? null : agentFilter.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray();
+        var alertTypeArr = string.IsNullOrWhiteSpace(alertTypeFilter)
+            ? null : alertTypeFilter.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray();
+
+        await using var conn = db.Create();
+        await conn.ExecuteAsync("""
+            INSERT INTO jarvis_schema.alert_channels
+                (channel_name, channel_type, config, min_severity, agent_filter, alert_type_filter, is_active)
+            VALUES
+                (@channelName, 'agent', @configJson::jsonb, @minSeverity,
+                 @agentFilter, @alertTypeFilter, true)
+            ON CONFLICT (channel_name) DO UPDATE SET
+                channel_type      = 'agent',
+                config            = EXCLUDED.config,
+                min_severity      = EXCLUDED.min_severity,
+                agent_filter      = EXCLUDED.agent_filter,
+                alert_type_filter = EXCLUDED.alert_type_filter,
+                is_active         = true
+            """, new
+        {
+            channelName,
+            configJson,
+            minSeverity,
+            agentFilter     = agentArr,
+            alertTypeFilter = alertTypeArr,
+        });
+
+        var redisDb = redis.GetDatabase();
+        await redisDb.KeyDeleteAsync("alert_channels");
+
+        logger.LogInformation("[Rocky] Agent alert channel '{Name}' → '{Agent}' configured",
+            channelName, targetAgent);
+
+        return Ok(new
+        {
+            channel_name = channelName,
+            target_agent = targetAgent,
+            min_severity = minSeverity,
+            message      = $"Agent alert channel '{channelName}' configured. Alerts will be posted to agent '{targetAgent}'."
         });
     }
 

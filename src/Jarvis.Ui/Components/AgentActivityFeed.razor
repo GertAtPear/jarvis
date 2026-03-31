@@ -1,0 +1,151 @@
+@inject ChatApiService Api
+@inject ILogger<AgentActivityFeed> Logger
+
+<div class="activity-feed @(IsOpen ? "activity-feed--open" : "")">
+
+    <div class="activity-feed-header">
+        <span class="activity-feed-title">Agent Activity</span>
+        @if (_pendingCount > 0)
+        {
+            <span class="activity-badge">@_pendingCount</span>
+        }
+        <button class="activity-feed-close" @onclick="() => OnClose.InvokeAsync()">&#x2715;</button>
+    </div>
+
+    <div class="activity-feed-body" id="activity-feed-body">
+        @if (_messages.Count == 0)
+        {
+            <div class="activity-empty">No agent activity yet.</div>
+        }
+        else
+        {
+            @foreach (var msg in _messages)
+            {
+                var isPending  = msg.RequiresApproval && msg.ApprovalStatus == "pending";
+                var isApproved = msg.ApprovalStatus == "approved";
+                var isDenied   = msg.ApprovalStatus == "denied";
+
+                <div class="activity-item @(isPending ? "activity-item--pending" : "") @(isDenied ? "activity-item--denied" : "")">
+                    <div class="activity-item-header">
+                        <span class="activity-from">@msg.FromAgent.ToUpperInvariant()</span>
+                        @if (msg.ToAgent is not null)
+                        {
+                            <span class="activity-arrow">&#x2192;</span>
+                            <span class="activity-to">@msg.ToAgent.ToUpperInvariant()</span>
+                        }
+                        else
+                        {
+                            <span class="activity-arrow">&#x2192;</span>
+                            <span class="activity-to activity-broadcast">BROADCAST</span>
+                        }
+                        <span class="activity-time">@FormatTime(msg.CreatedAt)</span>
+                    </div>
+
+                    <div class="activity-message">@msg.Message</div>
+
+                    @if (isPending)
+                    {
+                        <div class="activity-approval">
+                            <span class="activity-approval-label">&#x26A0; Approval required</span>
+                            <button class="activity-approve-btn"
+                                    @onclick="() => ApproveAsync(msg.Id)"
+                                    disabled="@_busy">
+                                Approve
+                            </button>
+                            <button class="activity-deny-btn"
+                                    @onclick="() => DenyAsync(msg.Id)"
+                                    disabled="@_busy">
+                                Deny
+                            </button>
+                        </div>
+                    }
+                    else if (isApproved)
+                    {
+                        <div class="activity-approved-label">&#x2713; Approved</div>
+                    }
+                    else if (isDenied)
+                    {
+                        <div class="activity-denied-label">&#x2715; Denied</div>
+                    }
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool                          IsOpen    { get; set; }
+    [Parameter] public EventCallback                 OnClose   { get; set; }
+    [Parameter] public List<AgentActivityMessageDto> Messages  { get; set; } = [];
+
+    private List<AgentActivityMessageDto> _messages = [];
+    private int  _pendingCount;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _messages = await Api.GetAgentMessagesAsync(100);
+        UpdatePendingCount();
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Merge incoming SignalR messages with our local list
+        foreach (var msg in Messages)
+        {
+            if (!_messages.Any(m => m.Id == msg.Id))
+                _messages.Add(msg);
+        }
+        _messages = [.. _messages.OrderBy(m => m.CreatedAt)];
+        UpdatePendingCount();
+    }
+
+    public void AddMessage(AgentActivityMessageDto msg)
+    {
+        if (!_messages.Any(m => m.Id == msg.Id))
+        {
+            _messages.Add(msg);
+            _messages = [.. _messages.OrderBy(m => m.CreatedAt)];
+            UpdatePendingCount();
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ApproveAsync(long id)
+    {
+        _busy = true;
+        StateHasChanged();
+        var ok = await Api.ApproveAgentMessageAsync(id);
+        if (ok)
+        {
+            var idx = _messages.FindIndex(m => m.Id == id);
+            if (idx >= 0)
+                _messages[idx] = _messages[idx] with { ApprovedAt = DateTimeOffset.Now, ApprovalStatus = "approved" };
+        }
+        _busy = false;
+        UpdatePendingCount();
+        StateHasChanged();
+    }
+
+    private async Task DenyAsync(long id)
+    {
+        _busy = true;
+        StateHasChanged();
+        var ok = await Api.DenyAgentMessageAsync(id);
+        if (ok)
+        {
+            var idx = _messages.FindIndex(m => m.Id == id);
+            if (idx >= 0)
+                _messages[idx] = _messages[idx] with { DeniedAt = DateTimeOffset.Now, ApprovalStatus = "denied" };
+        }
+        _busy = false;
+        UpdatePendingCount();
+        StateHasChanged();
+    }
+
+    private void UpdatePendingCount() =>
+        _pendingCount = _messages.Count(m => m.RequiresApproval && m.ApprovalStatus == "pending");
+
+    private static string FormatTime(DateTimeOffset dt) =>
+        dt.ToLocalTime().ToString("HH:mm");
+}

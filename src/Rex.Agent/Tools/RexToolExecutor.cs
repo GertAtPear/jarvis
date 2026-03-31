@@ -1,6 +1,9 @@
 using System.Text.Json;
+using Mediahost.Agents.Capabilities;
 using Mediahost.Agents.Services;
 using Mediahost.Llm.Models;
+using Mediahost.Shared.Services;
+using Mediahost.Tools.Models;
 using Rex.Agent.Data;
 using Rex.Agent.Data.Repositories;
 using Rex.Agent.Services;
@@ -13,7 +16,11 @@ public class RexToolExecutor(
     GitHubService gitHub,
     ContainerService containers,
     DeveloperAgentService devAgent,
+    TesterAgentService testerAgent,
+    SshCapability ssh,
+    HttpCapability http,
     RexMemoryService memory,
+    DeploymentRecipeRepository deploymentRecipes,
     ScaffoldingPlanService scaffoldingPlan,
     AgentScaffoldingService scaffolding,
     AgentMetadataService agentMetadata,
@@ -24,6 +31,7 @@ public class RexToolExecutor(
     AgentUpdateRepository updateRepo,
     IConnectionMultiplexer redis,
     IConfiguration config,
+    IScopedVaultService vault,
     ILogger<RexToolExecutor> logger) : IAgentToolExecutor
 {
     public IReadOnlyList<ToolDefinition> GetTools() => RexToolDefinitions.GetTools();
@@ -72,6 +80,7 @@ public class RexToolExecutor(
                 "container_list"    => await ContainerListAsync(ct),
                 "container_logs"    => await ContainerLogsAsync(input, ct),
                 "container_build"   => await ContainerBuildAsync(input, ct),
+                "container_push"    => await ContainerPushAsync(input, ct),
                 "container_restart" => await ContainerRestartAsync(input, ct),
                 "container_inspect" => await ContainerInspectAsync(input, ct),
 
@@ -101,6 +110,18 @@ public class RexToolExecutor(
                 "hard_retire_agent"        => await HardRetireAgentAsync(input, ct),
                 "reactivate_agent"         => await ReactivateAgentAsync(input, ct),
                 "list_agents"              => await ListAgentsAsync(input, ct),
+
+                // Tester Agent
+                "save_test_spec"   => await SaveTestSpecAsync(input, ct),
+                "get_test_spec"    => await GetTestSpecAsync(input, ct),
+                "list_test_specs"  => await ListTestSpecsAsync(ct),
+                "run_test_suite"   => await RunTestSuiteAsync(input, ct),
+
+                // Deployment Recipes
+                "save_deployment_recipe"  => await SaveDeploymentRecipeAsync(input, ct),
+                "get_deployment_recipe"   => await GetDeploymentRecipeAsync(input, ct),
+                "list_deployment_recipes" => await ListDeploymentRecipesAsync(ct),
+                "execute_deployment"      => await ExecuteDeploymentAsync(input, ct),
 
                 _ => Err($"Unknown tool: {toolName}")
             };
@@ -365,6 +386,36 @@ public class RexToolExecutor(
         var tag         = RequireString(input, "tag");
         var (ok, output) = await containers.BuildImageAsync(dockerfile, contextPath, tag, ct);
         return Ok(new { success = ok, tag, output });
+    }
+
+    private async Task<string> ContainerPushAsync(JsonDocument input, CancellationToken ct)
+    {
+        var tag       = RequireString(input, "image_tag");
+        var vaultPath = GetString(input, "vault_path") ?? "/rex/dockerhub";
+        var registry  = GetString(input, "registry")   ?? "docker.io";
+
+        var username = await vault.GetSecretAsync(vaultPath, "username", ct);
+        var password = await vault.GetSecretAsync(vaultPath, "password", ct);
+
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            return Err($"Docker Hub credentials not found at vault path '{vaultPath}'. " +
+                       "Add 'username' and 'password' fields in Infisical.");
+
+        var (loginOk, loginOutput) = await containers.LoginRegistryAsync(registry, username, password, ct);
+        if (!loginOk)
+            return Err($"Registry login failed: {loginOutput}");
+
+        var (pushOk, pushOutput) = await containers.PushImageAsync(tag, ct);
+        return Ok(new
+        {
+            success  = pushOk,
+            tag,
+            registry,
+            output   = pushOutput,
+            message  = pushOk
+                ? $"Image '{tag}' pushed to {registry} successfully."
+                : $"Push failed: {pushOutput}"
+        });
     }
 
     private async Task<string> ContainerRestartAsync(JsonDocument input, CancellationToken ct)
@@ -695,6 +746,236 @@ public class RexToolExecutor(
     private static int? GetInt(JsonDocument doc, string key) =>
         doc.RootElement.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.Number
             ? p.GetInt32() : null;
+
+    // ── Tester Agent ───────────────────────────────────────────────────────────
+
+    private async Task<string> SaveTestSpecAsync(JsonDocument input, CancellationToken ct)
+    {
+        var appName    = RequireString(input, "app_name");
+        var specJson   = RequireString(input, "spec_json");
+        var description = input.RootElement.TryGetProperty("description", out var d) ? d.GetString() : null;
+
+        // Validate the spec JSON is valid
+        try { JsonDocument.Parse(specJson); }
+        catch { return Err("spec_json is not valid JSON."); }
+
+        var key = $"test_spec:{appName}";
+        var storedValue = System.Text.Json.JsonSerializer.Serialize(new { appName, description, specJson });
+        await memory.RememberFactAsync(key, storedValue, ct);
+
+        return Ok(new { app_name = appName, saved = true, message = $"Test spec for '{appName}' saved." });
+    }
+
+    private async Task<string> GetTestSpecAsync(JsonDocument input, CancellationToken ct)
+    {
+        var appName = RequireString(input, "app_name");
+        var facts   = await memory.LoadFactsAsync(ct);
+        var key     = $"test_spec:{appName}";
+
+        if (!facts.TryGetValue(key, out var value))
+            return Err($"No test spec found for '{appName}'.");
+
+        return Ok(new { app_name = appName, spec = value });
+    }
+
+    private async Task<string> ListTestSpecsAsync(CancellationToken ct)
+    {
+        var facts = await memory.LoadFactsAsync(ct);
+        var specs  = facts
+            .Where(kv => kv.Key.StartsWith("test_spec:"))
+            .Select(kv =>
+            {
+                var appName = kv.Key["test_spec:".Length..];
+                try
+                {
+                    var parsed = JsonDocument.Parse(kv.Value).RootElement;
+                    return new
+                    {
+                        app_name    = appName,
+                        description = parsed.TryGetProperty("description", out var d) ? d.GetString() : null
+                    };
+                }
+                catch { return new { app_name = appName, description = (string?)null }; }
+            })
+            .ToList();
+
+        return Ok(new { count = specs.Count, specs });
+    }
+
+    private async Task<string> RunTestSuiteAsync(JsonDocument input, CancellationToken ct)
+    {
+        var appName    = RequireString(input, "app_name");
+        var phase      = RequireString(input, "phase");
+        var snapshotPath = input.RootElement.TryGetProperty("before_snapshot_path", out var sp)
+            ? sp.GetString() : null;
+
+        // Load saved test spec
+        var facts = await memory.LoadFactsAsync(ct);
+        var key   = $"test_spec:{appName}";
+        if (!facts.TryGetValue(key, out var specEntry))
+            return Err($"No test spec found for '{appName}'. Call save_test_spec first.");
+
+        string specJson;
+        try
+        {
+            var parsed = JsonDocument.Parse(specEntry).RootElement;
+            specJson   = parsed.GetProperty("specJson").GetString()!;
+        }
+        catch
+        {
+            return Err("Saved test spec is malformed.");
+        }
+
+        logger.LogInformation("[Rex] Running test suite for '{App}' — phase: {Phase}", appName, phase);
+        var report = await testerAgent.RunTestsAsync(appName, phase, specJson, snapshotPath, ct);
+        return Ok(new { app_name = appName, phase, report });
+    }
+
+    // ── Deployment Recipes ─────────────────────────────────────────────────────
+
+    private async Task<string> SaveDeploymentRecipeAsync(JsonDocument input, CancellationToken ct)
+    {
+        var appName       = RequireString(input, "app_name");
+        var targetServer  = RequireString(input, "target_server");
+        var stepsJson     = RequireString(input, "steps_json");
+        var description   = input.RootElement.TryGetProperty("description", out var d)   ? d.GetString()  : null;
+        var preChecksJson = input.RootElement.TryGetProperty("pre_checks_json", out var pc) ? pc.GetString() : null;
+        var postChecksJson = input.RootElement.TryGetProperty("post_checks_json", out var poc) ? poc.GetString() : null;
+
+        try { JsonDocument.Parse(stepsJson); }
+        catch { return Err("steps_json is not valid JSON."); }
+
+        await deploymentRecipes.UpsertAsync(appName, description, targetServer, stepsJson, preChecksJson, postChecksJson);
+        return Ok(new { app_name = appName, saved = true, message = $"Deployment recipe for '{appName}' saved." });
+    }
+
+    private async Task<string> GetDeploymentRecipeAsync(JsonDocument input, CancellationToken ct)
+    {
+        var appName = RequireString(input, "app_name");
+        var recipe  = await deploymentRecipes.GetByAppNameAsync(appName);
+        if (recipe is null) return Err($"No deployment recipe found for '{appName}'.");
+        return Ok(recipe);
+    }
+
+    private async Task<string> ListDeploymentRecipesAsync(CancellationToken ct)
+    {
+        var recipes = (await deploymentRecipes.GetAllAsync()).ToList();
+        return Ok(new { count = recipes.Count, recipes });
+    }
+
+    private async Task<string> ExecuteDeploymentAsync(JsonDocument input, CancellationToken ct)
+    {
+        var appName   = RequireString(input, "app_name");
+        var confirmed = GetBool(input, "confirmed") ?? false;
+
+        if (!confirmed)
+            return Err($"Deployment of '{appName}' requires confirmed=true. Ask Gert for approval first.");
+
+        var recipe = await deploymentRecipes.GetByAppNameAsync(appName);
+        if (recipe is null) return Err($"No deployment recipe found for '{appName}'.");
+
+        var stepsJson = (string)recipe.StepsJson;
+        JsonElement steps;
+        try { steps = JsonDocument.Parse(stepsJson).RootElement; }
+        catch { return Err("Deployment recipe steps are malformed JSON."); }
+
+        var results = new List<object>();
+        var allPassed = true;
+
+        foreach (var step in steps.EnumerateArray())
+        {
+            var type = step.TryGetProperty("type", out var t) ? t.GetString() : null;
+            var sw   = System.Diagnostics.Stopwatch.StartNew();
+
+            object stepResult;
+            try
+            {
+                stepResult = type switch
+                {
+                    "ssh_exec" => await ExecuteSshStepAsync(step, ct),
+                    "container_restart" => await ExecuteContainerRestartStepAsync(step, ct),
+                    "container_build"   => await ExecuteContainerBuildStepAsync(step, ct),
+                    "wait"              => await ExecuteWaitStepAsync(step),
+                    "http_check"        => await ExecuteHttpCheckStepAsync(step, ct),
+                    _ => new { type, success = false, error = $"Unknown step type '{type}'" }
+                };
+            }
+            catch (Exception ex)
+            {
+                stepResult = new { type, success = false, error = ex.Message };
+            }
+
+            sw.Stop();
+            // Check success by serializing and checking the JSON
+            var stepJson = JsonSerializer.Serialize(stepResult);
+            var stepDoc  = JsonDocument.Parse(stepJson);
+            var stepOk   = stepDoc.RootElement.TryGetProperty("success", out var suc) && suc.GetBoolean();
+            if (!stepOk) allPassed = false;
+
+            results.Add(new { step = step.ToString(), result = stepResult, duration_ms = sw.ElapsedMilliseconds });
+        }
+
+        logger.LogInformation("[Rex] Deployment of '{App}' completed — all_passed: {Ok}", appName, allPassed);
+        return Ok(new { app_name = appName, all_passed = allPassed, steps = results });
+    }
+
+    private async Task<object> ExecuteSshStepAsync(JsonElement step, CancellationToken ct)
+    {
+        var server  = step.GetProperty("server").GetString()!;
+        var command = step.GetProperty("command").GetString()!;
+
+        var creds = await ssh.GetCredentialsAsync(server, ct);
+        if (creds is null) return new { success = false, error = $"No SSH credentials for '{server}'" };
+
+        var target = new ConnectionTarget(server, null, 22, OsType.Linux);
+        var output = await ssh.RunAndReadAsync(target, creds, command, SshPermission.ReadWrite, ct);
+        return new { success = output is not null, output = output ?? "command failed" };
+    }
+
+    private async Task<object> ExecuteContainerRestartStepAsync(JsonElement step, CancellationToken ct)
+    {
+        var name = step.GetProperty("name").GetString()!;
+        await containers.RestartContainerAsync(name, ct);
+        return new { success = true };
+    }
+
+    private async Task<object> ExecuteContainerBuildStepAsync(JsonElement step, CancellationToken ct)
+    {
+        var dockerfile  = step.GetProperty("dockerfile").GetString()!;
+        var contextPath = step.GetProperty("context_path").GetString()!;
+        var tag         = step.GetProperty("tag").GetString()!;
+        var (ok, output) = await containers.BuildImageAsync(dockerfile, contextPath, tag, ct);
+        return new { success = ok, output, error = ok ? null : "Build failed — see output" };
+    }
+
+    private static Task<object> ExecuteWaitStepAsync(JsonElement step)
+    {
+        var seconds = step.TryGetProperty("seconds", out var s) ? s.GetInt32() : 5;
+        Thread.Sleep(TimeSpan.FromSeconds(seconds));
+        return Task.FromResult<object>(new { success = true, waited_seconds = seconds });
+    }
+
+    private async Task<object> ExecuteHttpCheckStepAsync(JsonElement step, CancellationToken ct)
+    {
+        var url            = step.GetProperty("url").GetString()!;
+        var expectStatus   = step.TryGetProperty("expect_status", out var es) ? es.GetInt32() : 200;
+        var timeoutSeconds = step.TryGetProperty("timeout_seconds", out var ts) ? ts.GetInt32() : 10;
+
+        var result = await http.CheckAsync(url, timeoutSeconds, followRedirects: true, ct);
+        if (!result.Success)
+            return new { success = false, status_code = (int?)null, response_time_ms = 0L, error = result.ErrorMessage };
+
+        var r       = result.Value!;
+        var matches = r.StatusCode.HasValue && r.StatusCode.Value == expectStatus;
+        return new
+        {
+            success          = matches,
+            status_code      = r.StatusCode,
+            expected         = expectStatus,
+            response_time_ms = r.ResponseTimeMs,
+            error            = matches ? null : $"Expected HTTP {expectStatus}, got {r.StatusCode?.ToString() ?? "no response"}"
+        };
+    }
 
     private static bool? GetBool(JsonDocument doc, string key) =>
         doc.RootElement.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.True ||

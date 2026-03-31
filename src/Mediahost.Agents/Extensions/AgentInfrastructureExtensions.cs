@@ -1,5 +1,6 @@
 using Mediahost.Agents.Alerting;
 using Mediahost.Agents.Data;
+using Mediahost.Agents.Services;
 using Mediahost.Llm.Extensions;
 using Mediahost.Shared.Services;
 using Mediahost.Vault.Services;
@@ -27,6 +28,9 @@ public static class AgentInfrastructureExtensions
         string agentName,
         string[] vaultOwnedPrefixes)
     {
+        // ── Agent name provider — used by AgentMessagingModule to stamp from_agent ──
+        services.AddSingleton<IAgentNameProvider>(new AgentNameProvider(agentName));
+
         // ── DbConnectionFactory — used by AgentMemoryService subclasses ───────────
         services.AddSingleton<DbConnectionFactory>();
 

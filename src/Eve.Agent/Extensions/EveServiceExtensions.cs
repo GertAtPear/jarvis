@@ -25,6 +25,7 @@ public static class EveServiceExtensions
 
         // ── Laptop tools ──────────────────────────────────────────────────────────
         services.AddScoped<IToolModule, LaptopModule>();
+        services.AddScoped<IToolModule, AgentMessagingModule>();
 
         // ── Tool executor ─────────────────────────────────────────────────────────
         services.AddScoped<EveToolExecutor>();

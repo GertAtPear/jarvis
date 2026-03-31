@@ -390,6 +390,22 @@ public static class RexToolDefinitions
             """)),
 
         new ToolDefinition(
+            "container_push",
+            "Push a locally built image to a container registry (Docker Hub by default). " +
+            "Reads registry credentials from vault. Always call container_build first to ensure the image exists locally.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "image_tag":  { "type": "string",  "description": "Full image tag to push, e.g. mediahost/appname:latest" },
+                "vault_path": { "type": "string",  "description": "Vault path containing registry credentials (default: /rex/dockerhub)" },
+                "registry":   { "type": "string",  "description": "Registry hostname (default: docker.io)" }
+              },
+              "required": ["image_tag"]
+            }
+            """)),
+
+        new ToolDefinition(
             "container_restart",
             "Restart a running container",
             JsonDocument.Parse("""
@@ -679,6 +695,126 @@ public static class RexToolDefinitions
               "properties": {
                 "include_retired": { "type": "boolean", "description": "Include retired agents (default false)" }
               }
+            }
+            """)),
+
+        // ── Tester Agent ──────────────────────────────────────────────────────
+
+        new ToolDefinition(
+            "save_test_spec",
+            "Save a test specification for an application so it can be reused across test runs. " +
+            "The spec defines HTTP assertions, shell commands, and snapshot queries Rex wants verified.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "app_name":    { "type": "string", "description": "Application name (unique key)" },
+                "description": { "type": "string", "description": "What these tests verify" },
+                "spec_json":   { "type": "string", "description": "JSON test specification: {\"http_tests\":[...],\"shell_commands\":[...],\"snapshot_queries\":[]}" }
+              },
+              "required": ["app_name", "spec_json"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "get_test_spec",
+            "Retrieve a previously saved test specification for an application.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "app_name": { "type": "string", "description": "Application name" }
+              },
+              "required": ["app_name"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "list_test_specs",
+            "List all saved test specifications.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {}
+            }
+            """)),
+
+        new ToolDefinition(
+            "run_test_suite",
+            "Spawn a temporary tester agent to execute a test specification. " +
+            "Use phase='before' before making changes and phase='after' to verify the change didn't break anything. " +
+            "The tester is stateless — it runs and reports results but has no memory.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "app_name":            { "type": "string", "description": "Application name (must have a saved test spec)" },
+                "phase":               { "type": "string", "description": "Test phase: before | after | standalone" },
+                "before_snapshot_path": { "type": "string", "description": "Workspace path to the before-snapshot (required for 'after' phase snapshot tests)" }
+              },
+              "required": ["app_name", "phase"]
+            }
+            """)),
+
+        // ── Deployment Recipes ────────────────────────────────────────────────
+
+        new ToolDefinition(
+            "save_deployment_recipe",
+            "Save or update a deployment recipe for an application. " +
+            "Steps are executed in order when deploying. Supported step types: " +
+            "ssh_exec (run shell command), container_restart (restart a container), " +
+            "container_build (build an image), wait (pause N seconds), http_check (verify health endpoint).",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "app_name":     { "type": "string", "description": "Application name (unique key)" },
+                "description":  { "type": "string", "description": "What this deploys" },
+                "target_server":{ "type": "string", "description": "Primary server hostname (registered in Andrew)" },
+                "steps_json":   { "type": "string", "description": "JSON array of steps, e.g. [{\"type\":\"ssh_exec\",\"server\":\"prod-1\",\"command\":\"cd /opt/app && git pull\"},{\"type\":\"container_restart\",\"name\":\"myapp\"},{\"type\":\"wait\",\"seconds\":5},{\"type\":\"http_check\",\"url\":\"http://prod-1/health\",\"expect_status\":200}]" },
+                "pre_checks_json":  { "type": "string", "description": "Optional JSON array of health checks to run before deploying" },
+                "post_checks_json": { "type": "string", "description": "Optional JSON array of health checks to run after deploying" }
+              },
+              "required": ["app_name", "target_server", "steps_json"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "get_deployment_recipe",
+            "Retrieve a deployment recipe for an application.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "app_name": { "type": "string", "description": "Application name" }
+              },
+              "required": ["app_name"]
+            }
+            """)),
+
+        new ToolDefinition(
+            "list_deployment_recipes",
+            "List all registered deployment recipes.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {}
+            }
+            """)),
+
+        new ToolDefinition(
+            "execute_deployment",
+            "Execute the deployment recipe for an application. " +
+            "ALWAYS ask Gert for confirmation before calling this tool. " +
+            "Runs pre-checks, then steps in order, then post-checks. Reports each step's outcome.",
+            JsonDocument.Parse("""
+            {
+              "type": "object",
+              "properties": {
+                "app_name": { "type": "string", "description": "Application name to deploy" },
+                "confirmed": { "type": "boolean", "description": "Must be true — confirms Gert has approved this deployment" }
+              },
+              "required": ["app_name", "confirmed"]
             }
             """))
     ];

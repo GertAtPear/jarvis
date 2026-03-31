@@ -130,6 +130,11 @@ public class AlertDispatchService(
                 await DispatchEmailAsync(channel, alert, ct);
                 delivered = true;
             }
+            else if (channel.ChannelType == "agent")
+            {
+                await DispatchToAgentAsync(channel, alert, ct);
+                delivered = true;
+            }
             else
             {
                 error = $"Unknown channel type: {channel.ChannelType}";
@@ -234,6 +239,43 @@ public class AlertDispatchService(
 
         await client.SendMailAsync(msg, ct);
         logger.LogInformation("Alert dispatched via email to {Count} recipient(s)", toAddresses.Length);
+    }
+
+    private async Task DispatchToAgentAsync(AlertChannel channel, AlertPayload alert, CancellationToken ct)
+    {
+        var configDoc  = JsonDocument.Parse(channel.ConfigJson ?? "{}");
+        var targetAgent = configDoc.RootElement.TryGetProperty("agent", out var a)
+            ? a.GetString() : null;
+
+        if (string.IsNullOrEmpty(targetAgent))
+            throw new InvalidOperationException("Agent alert channel config missing 'agent' field");
+
+        var emoji   = SeverityEmoji.GetValueOrDefault(alert.Severity.ToLower(), "⚪");
+        var message = $"{emoji} [{alert.Severity.ToUpper()}] {alert.Title}\n{alert.Body}";
+
+        await using var conn = db.Create();
+        await conn.ExecuteAsync("""
+            INSERT INTO jarvis_schema.agent_messages
+                (from_agent, to_agent, message, requires_approval, metadata)
+            VALUES
+                ('rocky', @toAgent, @message, false,
+                 @metadata::jsonb)
+            """, new
+        {
+            toAgent  = targetAgent,
+            message,
+            metadata = JsonSerializer.Serialize(new
+            {
+                alert_id   = alert.AlertId,
+                alert_type = alert.AlertType,
+                severity   = alert.Severity,
+                source_url = alert.SourceUrl,
+                channel    = channel.ChannelName
+            })
+        });
+
+        logger.LogInformation("Alert dispatched to agent '{Agent}' via channel '{Channel}'",
+            targetAgent, channel.ChannelName);
     }
 
     private async Task LogDispatchAsync(AlertPayload alert, AlertChannel channel, bool delivered, string? error)

@@ -10,11 +10,23 @@ public class ContactRepository(DbConnectionFactory db)
         id,
         name,
         relationship,
+        contact_type    AS ContactType,
+        company,
+        phone_cell      AS PhoneCell,
+        phone_work      AS PhoneWork,
+        phone_home      AS PhoneHome,
+        email_personal  AS EmailPersonal,
+        email_work      AS EmailWork,
+        address_home    AS AddressHome,
+        address_work    AS AddressWork,
+        website,
+        social_links::text  AS SocialLinksJson,
+        extra::text         AS ExtraJson,
         birthday,
         anniversary,
         notes,
-        tags::text  AS TagsJson,
-        created_at  AS CreatedAt
+        tags::text      AS TagsJson,
+        created_at      AS CreatedAt
         """;
 
     public async Task<IEnumerable<Contact>> GetAllAsync()
@@ -35,8 +47,6 @@ public class ContactRepository(DbConnectionFactory db)
     public async Task<IEnumerable<Contact>> GetBirthdaysThisWeekAsync()
     {
         await using var conn = db.Create();
-        // Construct "this year's birthday" for each contact and check if it falls
-        // within the next 7 days (handles year-end boundary by also checking next year)
         const string sql = """
             SELECT {0}
             FROM eve_schema.contacts
@@ -89,25 +99,58 @@ public class ContactRepository(DbConnectionFactory db)
         await using var conn = db.Create();
         const string sql = """
             INSERT INTO eve_schema.contacts
-                (name, relationship, birthday, anniversary, notes, tags)
+                (name, relationship, contact_type, company,
+                 phone_cell, phone_work, phone_home,
+                 email_personal, email_work,
+                 address_home, address_work,
+                 website, social_links, extra,
+                 birthday, anniversary, notes, tags)
             VALUES
-                (@Name, @Relationship, @Birthday, @Anniversary, @Notes, @TagsJson::jsonb)
-            ON CONFLICT (id) DO UPDATE SET
-                name         = EXCLUDED.name,
-                relationship = EXCLUDED.relationship,
-                birthday     = EXCLUDED.birthday,
-                anniversary  = EXCLUDED.anniversary,
-                notes        = EXCLUDED.notes,
-                tags         = EXCLUDED.tags
+                (@Name, @Relationship, @ContactType, @Company,
+                 @PhoneCell, @PhoneWork, @PhoneHome,
+                 @EmailPersonal, @EmailWork,
+                 @AddressHome, @AddressWork,
+                 @Website, @SocialLinksJson::jsonb, @ExtraJson::jsonb,
+                 @Birthday, @Anniversary, @Notes, @TagsJson::jsonb)
+            ON CONFLICT (name) DO UPDATE SET
+                relationship   = EXCLUDED.relationship,
+                contact_type   = EXCLUDED.contact_type,
+                company        = EXCLUDED.company,
+                phone_cell     = EXCLUDED.phone_cell,
+                phone_work     = EXCLUDED.phone_work,
+                phone_home     = EXCLUDED.phone_home,
+                email_personal = EXCLUDED.email_personal,
+                email_work     = EXCLUDED.email_work,
+                address_home   = EXCLUDED.address_home,
+                address_work   = EXCLUDED.address_work,
+                website        = EXCLUDED.website,
+                social_links   = EXCLUDED.social_links,
+                extra          = EXCLUDED.extra,
+                birthday       = EXCLUDED.birthday,
+                anniversary    = EXCLUDED.anniversary,
+                notes          = EXCLUDED.notes,
+                tags           = EXCLUDED.tags
             """;
         await conn.ExecuteAsync(sql, new
         {
             contact.Name,
             contact.Relationship,
+            contact.ContactType,
+            contact.Company,
+            contact.PhoneCell,
+            contact.PhoneWork,
+            contact.PhoneHome,
+            contact.EmailPersonal,
+            contact.EmailWork,
+            contact.AddressHome,
+            contact.AddressWork,
+            contact.Website,
+            SocialLinksJson = contact.SocialLinksJson ?? "{}",
+            ExtraJson       = contact.ExtraJson       ?? "{}",
             contact.Birthday,
             contact.Anniversary,
             contact.Notes,
-            TagsJson = contact.TagsJson ?? "null"
+            TagsJson        = contact.TagsJson        ?? "null"
         });
     }
 }
